@@ -8,3 +8,4 @@ else()
   target_compile_options(worker PRIVATE -O3 -fopenmp)
   target_link_libraries(worker PRIVATE -fopenmp)
 endif()
+
