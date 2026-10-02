@@ -11,8 +11,8 @@ from visualizer import Visualizer
 WORKER_PATH = os.environ.get("WORKER_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker_cpp', 'worker.exe')))
 
 class Shape:
-    def __init__(self, L, t_pts, alpha=0.0, camber=0.0):
-        self.L = round(L, 3)
+    def __init__(self, t_pts, alpha=0.0, camber=0.0):
+        self.L = 60.0 # Fixed chord length to avoid Reynolds number hacking
         self.t_pts = [round(t, 3) for t in t_pts]
         self.alpha = round(alpha, 3)
         self.camber = round(camber, 3)
@@ -22,10 +22,6 @@ class Shape:
         self.heatmap = None
 
     def mutate(self):
-        if random.random() < 0.3:
-            self.L += random.gauss(0, 5)
-            self.L = max(20.0, min(self.L, 80.0))
-        
         # Mutate all 5 points independently to allow the AI to discover the optimal nose/tail
         for i in range(len(self.t_pts)):
             if random.random() < 0.3:
@@ -43,18 +39,16 @@ class Shape:
             self.camber = max(0.0, min(self.camber, 10.0))
 
         # Round to keep reproducible
-        self.L = round(self.L, 3)
         self.t_pts = [round(t, 3) for t in self.t_pts]
         self.alpha = round(self.alpha, 3)
         self.camber = round(self.camber, 3)
 
 def create_random_shape():
-    L = random.uniform(40, 70)
     # 5 fully random thickness points! It starts as a "flying brick"
     t_pts = [random.uniform(5, 25) for _ in range(5)]
     alpha = random.uniform(0, 10.0)
     camber = random.uniform(0, 5.0)
-    return Shape(L, t_pts, alpha, camber)
+    return Shape(t_pts, alpha, camber)
 
 def run_worker(shape, shape_id, gen, generate_csv=False):
     run_dir = os.path.join(os.path.dirname(__file__), f"run_g{gen}_s{shape_id}")
@@ -179,12 +173,10 @@ def main():
                 w = random.random()
                 child_t_pts.append(w * t1 + (1 - w) * t2)
             
-            w_L = random.random()
             w_a = random.random()
             w_c = random.random()
             
             child = Shape(
-                w_L * parent1.L + (1 - w_L) * parent2.L,
                 child_t_pts,
                 w_a * parent1.alpha + (1 - w_a) * parent2.alpha,
                 w_c * parent1.camber + (1 - w_c) * parent2.camber
@@ -197,6 +189,34 @@ def main():
         population = next_population
         
     print("\nEvolution complete! Check the 'orchestrator_py/results' folder for visualizations.")
+    
+    print("\n--- Running High-Fidelity Verification on Best Shape ---")
+    best_overall = min(population, key=lambda s: s.fitness)
+    print(f"Candidate: L={best_overall.L:.1f}, Thick={best_overall.t_pts}, alpha={best_overall.alpha:.1f}, c={best_overall.camber:.1f}")
+    
+    run_dir = os.path.join(os.path.dirname(__file__), "run_verification")
+    os.makedirs(run_dir, exist_ok=True)
+    cmd = [
+        WORKER_PATH, str(best_overall.L)
+    ] + [str(t) for t in best_overall.t_pts] + [
+        str(best_overall.alpha), str(best_overall.camber), 
+        "--steps", "30000", "--avg", "20000", "--csv", "u_mag_verified.csv"
+    ]
+    
+    env = {**os.environ, "OMP_NUM_THREADS": "1"}
+    try:
+        print("Running long simulation (30,000 steps)... this may take a minute.")
+        result = subprocess.run(cmd, cwd=run_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, env=env)
+        output = json.loads(result.stdout.strip())
+        v_drag = output.get("cd", float('inf'))
+        v_lift = output.get("cl", 0.0)
+        v_ld = v_lift / v_drag if v_drag > 0.001 else 0
+        print(f"Verification Result:")
+        print(f"  Short Run (6k steps) L/D: {-best_overall.fitness:.3f}")
+        print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
+        print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
+    except Exception as e:
+        print("Verification failed.")
 
 if __name__ == "__main__":
     main()

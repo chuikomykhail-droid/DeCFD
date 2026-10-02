@@ -49,7 +49,12 @@ class Visualizer:
         
         axs[0].plot(top_x, top_y, 'b-', label='Top')
         axs[0].plot(bot_x, bot_y, 'b-', label='Bottom')
-        axs[0].fill_between(top_x, bot_y, top_y, color='blue', alpha=0.3)
+        
+        # Correctly fill the polygon by connecting top and reversed bottom
+        poly_x = top_x + bot_x[::-1]
+        poly_y = top_y + bot_y[::-1]
+        axs[0].fill(poly_x, poly_y, color='blue', alpha=0.3)
+        
         axs[0].set_aspect('equal', 'box')
         axs[0].grid(True, linestyle='--', alpha=0.6)
         
@@ -87,3 +92,4 @@ class Visualizer:
         plt.close()
         
         print(f"Rendered visualization to {save_path}")
+
