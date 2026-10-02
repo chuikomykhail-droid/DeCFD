@@ -19,15 +19,16 @@ class Shape:
         self.L += random.gauss(0, 5)
         self.L = max(20.0, min(self.L, 80.0))
         
-        for i in range(len(self.t_pts)):
+        # Only mutate the middle 3 points. Nose (0) and Tail (4) stay 0.
+        for i in range(1, len(self.t_pts) - 1):
             self.t_pts[i] += random.gauss(0, 3)
             # Clamp values to avoid crashing simulation and keep it reasonable
             self.t_pts[i] = max(0.0, min(self.t_pts[i], 30.0))
 
 def create_random_shape():
     L = random.uniform(40, 70)
-    # 5 random thickness points. It will start looking like a blob!
-    t_pts = [random.uniform(5, 25) for _ in range(5)]
+    # Nose=0, Tail=0, 3 random middle points
+    t_pts = [0.0] + [random.uniform(5, 25) for _ in range(3)] + [0.0]
     return Shape(L, t_pts)
 
 def run_worker(shape, shape_id, gen):
