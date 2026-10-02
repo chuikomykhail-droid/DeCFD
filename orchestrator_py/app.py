@@ -10,35 +10,34 @@ GENERATIONS = 3
 WORKER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker_cpp', 'worker.exe'))
 
 class Shape:
-    def __init__(self, L, T, P):
+    def __init__(self, L, t_pts):
         self.L = L # Length
-        self.T = T # Thickness
-        self.P = P # Position of max thickness
+        self.t_pts = t_pts # List of 5 thickness points
         self.drag = float('inf')
         self.heatmap = None
 
     def mutate(self):
         self.L += random.gauss(0, 5)
-        self.T += random.gauss(0, 2)
-        self.P += random.gauss(0, 2)
-        
-        # Clamp values to avoid simulation crashes (e.g. going outside grid)
         self.L = max(20.0, min(self.L, 80.0))
-        self.T = max(5.0, min(self.T, 30.0))
-        self.P = max(5.0, min(self.P, self.L - 5.0))
+        
+        for i in range(len(self.t_pts)):
+            self.t_pts[i] += random.gauss(0, 3)
+            # Clamp values to avoid crashing simulation and keep it reasonable
+            self.t_pts[i] = max(0.0, min(self.t_pts[i], 30.0))
 
 def create_random_shape():
     L = random.uniform(40, 70)
-    T = random.uniform(10, 25)
-    P = random.uniform(10, L - 10)
-    return Shape(L, T, P)
+    # 5 random thickness points. It will start looking like a blob!
+    t_pts = [random.uniform(5, 25) for _ in range(5)]
+    return Shape(L, t_pts)
 
 def run_worker(shape, shape_id, gen):
     # Unique directory for this run to avoid u_mag.csv conflicts
     run_dir = os.path.join(os.path.dirname(__file__), f"run_g{gen}_s{shape_id}")
     os.makedirs(run_dir, exist_ok=True)
     
-    cmd = [WORKER_PATH, str(shape.L), str(shape.T), str(shape.P)]
+    # Pass L and the 5 thickness points to C++
+    cmd = [WORKER_PATH, str(shape.L)] + [str(t) for t in shape.t_pts]
     
     try:
         # Run C++ worker subprocess
@@ -78,7 +77,8 @@ def main():
         
         best_shape = population[0]
         best_drags.append(best_shape.drag)
-        print(f"Best Drag: {best_shape.drag:.6f} (L={best_shape.L:.1f}, T={best_shape.T:.1f}, P={best_shape.P:.1f})")
+        t_str = ", ".join([f"{t:.1f}" for t in best_shape.t_pts])
+        print(f"Best Drag: {best_shape.drag:.6f} (L={best_shape.L:.1f}, Thick=[{t_str}])")
         
         # Visualize best shape of the generation
         vis.render_generation(gen, best_shape, best_drags)
@@ -92,10 +92,10 @@ def main():
             parent2 = min(random.sample(population, 2), key=lambda s: s.drag)
             
             # Crossover (average)
+            child_t_pts = [(t1 + t2) / 2.0 for t1, t2 in zip(parent1.t_pts, parent2.t_pts)]
             child = Shape(
-                (parent1.L + parent2.L) / 2,
-                (parent1.T + parent2.T) / 2,
-                (parent1.P + parent2.P) / 2
+                (parent1.L + parent2.L) / 2.0,
+                child_t_pts
             )
             
             # Mutation

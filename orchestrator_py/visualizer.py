@@ -15,25 +15,23 @@ class Visualizer:
         axs[0].set_xlim(0, 100) 
         axs[0].set_ylim(-30, 30)
         
-        # Simple rendering for top/bottom curve (Ellipse front, linear back)
+        # Simple rendering for top/bottom curve using Cosine Interpolation
         xs = np.linspace(0, best_shape.L, 200)
         ys = []
+        n_segments = len(best_shape.t_pts) - 1
+        seg_len = best_shape.L / n_segments
+        
         for x in xs:
-            if x <= best_shape.P:
-                # Ellipse
-                if best_shape.P > 0:
-                    v = 1.0 - ((x - best_shape.P) / best_shape.P)**2
-                    ys.append((best_shape.T / 2.0) * np.sqrt(max(0, v)))
-                else:
-                    ys.append(0)
-            else:
-                # Linear taper
-                L_back = best_shape.L - best_shape.P
-                if L_back > 0:
-                    v = 1.0 - (x - best_shape.P) / L_back
-                    ys.append((best_shape.T / 2.0) * max(0, v))
-                else:
-                    ys.append(0)
+            seg = min(int(x / seg_len), n_segments - 1)
+            x0 = seg * seg_len
+            x1 = (seg + 1) * seg_len
+            t0 = best_shape.t_pts[seg]
+            t1 = best_shape.t_pts[seg + 1]
+            
+            fraction = (x - x0) / (x1 - x0) if x1 > x0 else 0
+            mu = (1.0 - np.cos(fraction * np.pi)) / 2.0
+            half_T = (t0 * (1.0 - mu) + t1 * mu) / 2.0
+            ys.append(half_T)
                 
         axs[0].plot(xs, ys, 'b-', label='Top')
         axs[0].plot(xs, [-y for y in ys], 'b-', label='Bottom')
@@ -61,7 +59,7 @@ class Visualizer:
         axs[2].grid(True, linestyle='--', alpha=0.6)
         
         plt.tight_layout()
-        save_path = os.path.join(self.results_dir, f"gen_{gen}.png")
+        save_path = os.path.join(self.results_dir, f"generation_{gen}.png")
         plt.savefig(save_path, dpi=200)
         plt.close()
         

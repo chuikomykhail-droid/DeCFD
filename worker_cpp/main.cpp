@@ -35,14 +35,15 @@ inline int sidx(int x, int y) {
 int main(int argc, char** argv) {
     // Default shape parameters
     double L = 60.0;
-    double T = 20.0;
-    double P = 20.0;
+    std::vector<double> T_pts = {0.0, 20.0, 20.0, 10.0, 0.0}; // 5 control points
     
     // Read from CLI if provided
-    if (argc >= 4) {
+    if (argc >= 7) {
         L = std::stod(argv[1]);
-        T = std::stod(argv[2]);
-        P = std::stod(argv[3]);
+        T_pts.clear();
+        for(int i=2; i<7; i++) {
+            T_pts.push_back(std::stod(argv[i]));
+        }
     }
 
     // Initialize solid (rasterizing the shape)
@@ -50,23 +51,24 @@ int main(int argc, char** argv) {
         for (int y = 0; y < Ny; y++) {
             double xc = Nx / 4.0; // Place obstacle at 1/4 of the channel
             double yc = Ny / 2.0;
-            double x_rel = x - (xc - P); // Front of the shape is at x_rel = 0
+            double x_rel = x - xc; // Front of the shape is at x_rel = 0
             
             bool is_s = false;
             if (x_rel >= 0 && x_rel <= L) {
-                double half_T = 0.0;
-                if (x_rel <= P && P > 0) {
-                    // Front part: ellipse
-                    double v = 1.0 - std::pow((x_rel - P) / P, 2);
-                    if (v > 0) half_T = (T / 2.0) * std::sqrt(v);
-                } else {
-                    // Back part: linear taper to 0
-                    double L_back = L - P;
-                    if (L_back > 0) {
-                        double v = 1.0 - (x_rel - P) / L_back;
-                        if (v > 0) half_T = (T / 2.0) * v; 
-                    }
-                }
+                int n_segments = T_pts.size() - 1;
+                double seg_len = L / n_segments;
+                int seg = std::min((int)(x_rel / seg_len), n_segments - 1);
+                
+                double x0 = seg * seg_len;
+                double x1 = (seg + 1) * seg_len;
+                double t0 = T_pts[seg];
+                double t1 = T_pts[seg + 1];
+                
+                // Cosine interpolation for smooth curves
+                double fraction = (x_rel - x0) / (x1 - x0);
+                double mu = (1.0 - std::cos(fraction * 3.14159265358979323846)) / 2.0;
+                double half_T = (t0 * (1.0 - mu) + t1 * mu) / 2.0;
+                
                 if (std::abs(y - yc) <= half_T) is_s = true;
             }
             solid[sidx(x, y)] = is_s;
