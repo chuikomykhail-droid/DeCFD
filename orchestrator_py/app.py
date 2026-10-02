@@ -117,6 +117,12 @@ def main():
     
     best_drags = []
     mutation_scale = 1.0
+    succ_hist = []
+    best_ever_fitness = float('inf')
+    gens_without_improvement = 0
+    WINDOW = 4
+    SCALE_MIN = 0.18
+    SCALE_MAX = 2.0
 
     for gen in range(GENERATIONS):
         print(f"\n--- Generation {gen} ---")
@@ -150,24 +156,34 @@ def main():
             # Soft penalty for volume, doesn't completely overwhelm the fitness anymore
             s.fitness += 5.0 * max(0.0, 1.0 - area / MIN_AREA)
             
-        # 1/5th success rule (Rechenberg)
+        # 1/5th success rule (Rechenberg) with Windowing
         if gen > 0 and todo:
             evaluated_children = [s for _, s in todo]
-            # Since fitness is negative L/D, lower is better. We check if child is strictly better than the best parent
+            # Since fitness is negative L/D, lower is better
             success_count = sum(1 for c in evaluated_children if c.fitness < c.parent_best_fitness)
             success_rate = success_count / len(evaluated_children)
+            succ_hist.append(success_rate)
             
-            if success_rate > 0.2:
-                mutation_scale *= 1.22
-            else:
-                mutation_scale *= 0.82
-            mutation_scale = max(0.1, min(mutation_scale, 2.0))
-            print(f"1/5th Rule: Success {success_rate*100:.0f}%, new mutation scale = {mutation_scale:.2f}")
+            if len(succ_hist) % WINDOW == 0:
+                p = sum(succ_hist[-WINDOW:]) / WINDOW
+                if p > 0.2:
+                    mutation_scale *= 1.15
+                else:
+                    mutation_scale *= 0.87
+                mutation_scale = max(SCALE_MIN, min(mutation_scale, SCALE_MAX))
+                print(f"1/5th Rule Window: Avg Success {p*100:.0f}%, new mutation scale = {mutation_scale:.2f}")
                 
         # Sort by fitness (lower is better, since we use negative L/D)
         population.sort(key=lambda s: s.fitness)
         
         best_shape = population[0]
+        
+        # Track stagnation
+        if best_shape.fitness < best_ever_fitness - 1e-4:
+            best_ever_fitness = best_shape.fitness
+            gens_without_improvement = 0
+        else:
+            gens_without_improvement += 1
         
         # Re-run best shape to get CSV for heatmap!
         _, _, csv_path = run_worker(best_shape, "best", gen, generate_csv=True)
@@ -182,6 +198,18 @@ def main():
 
         # Evolution (Tournament + Crossover)
         next_population = [best_shape] # Elitism (keep the best)
+        
+        # Stagnation shake-up
+        if gens_without_improvement >= 8:
+            print("Stagnation detected! Applying shake-up (scale=1.5, adding immigrants).")
+            mutation_scale = 1.5
+            gens_without_improvement = 0
+            
+            # Add 15% random immigrants to escape local minima
+            num_immigrants = max(1, int(POPULATION_SIZE * 0.15))
+            for _ in range(num_immigrants):
+                if len(next_population) < POPULATION_SIZE:
+                    next_population.append(create_random_shape())
         
         while len(next_population) < POPULATION_SIZE:
             # Tournament selection (size=2)
