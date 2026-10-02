@@ -14,6 +14,9 @@ class Shape:
     def __init__(self, t_pts, alpha=0.0, camber=0.0):
         self.L = 60.0 # Fixed chord length to avoid Reynolds number hacking
         self.t_pts = [round(t, 3) for t in t_pts]
+        # Restrict trailing edge thickness to at most 0.1 * L to enforce a physical tail
+        self.t_pts[-1] = min(self.t_pts[-1], round(0.1 * self.L, 3))
+        
         self.alpha = round(alpha, 3)
         self.camber = round(camber, 3)
         self.drag = float('inf')
@@ -37,6 +40,9 @@ class Shape:
             # Mutate camber (0 to 10 lattice cells)
             self.camber += random.gauss(0, 1.0)
             self.camber = max(0.0, min(self.camber, 10.0))
+
+        # Enforce trailing edge constraint after mutation
+        self.t_pts[-1] = min(self.t_pts[-1], 0.1 * self.L)
 
         # Round to keep reproducible
         self.t_pts = [round(t, 3) for t in self.t_pts]
