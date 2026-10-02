@@ -2,11 +2,10 @@ import os
 import random
 import subprocess
 import concurrent.futures
+import argparse
 from visualizer import Visualizer
 
 # Config
-POPULATION_SIZE = 4
-GENERATIONS = 3
 WORKER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker_cpp', 'worker.exe'))
 
 class Shape:
@@ -50,6 +49,14 @@ def run_worker(shape, shape_id, gen):
         return float('inf'), None
 
 def main():
+    parser = argparse.ArgumentParser(description="DeCFD Genetic Algorithm Orchestrator")
+    parser.add_argument('--pop', type=int, default=4, help='Population size per generation')
+    parser.add_argument('--gen', type=int, default=3, help='Number of generations to run')
+    args = parser.parse_args()
+
+    POPULATION_SIZE = args.pop
+    GENERATIONS = args.gen
+
     if not os.path.exists(WORKER_PATH):
         print(f"Worker not found at {WORKER_PATH}")
         print("Please compile the C++ worker first.")
