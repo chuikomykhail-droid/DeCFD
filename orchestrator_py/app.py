@@ -23,22 +23,23 @@ class Shape:
         self.lift = 0.0
         self.fitness = float('inf')
         self.heatmap = None
+        self.parent_best_fitness = float('inf')
 
-    def mutate(self):
+    def mutate(self, scale=1.0):
         # Mutate all 5 points independently to allow the AI to discover the optimal nose/tail
         for i in range(len(self.t_pts)):
             if random.random() < 0.3:
-                self.t_pts[i] += random.gauss(0, 3)
+                self.t_pts[i] += random.gauss(0, 3.0 * scale)
                 self.t_pts[i] = max(0.0, min(self.t_pts[i], 30.0))
             
         if random.random() < 0.3:
             # Mutate angle of attack (-5 to 20 degrees)
-            self.alpha += random.gauss(0, 2.0)
+            self.alpha += random.gauss(0, 2.0 * scale)
             self.alpha = max(-5.0, min(self.alpha, 20.0))
         
         if random.random() < 0.3:
             # Mutate camber (0 to 10 lattice cells)
-            self.camber += random.gauss(0, 1.0)
+            self.camber += random.gauss(0, 1.0 * scale)
             self.camber = max(0.0, min(self.camber, 10.0))
 
         # Enforce trailing edge constraint after mutation
@@ -115,6 +116,7 @@ def main():
     vis = Visualizer()
     
     best_drags = []
+    mutation_scale = 1.0
 
     for gen in range(GENERATIONS):
         print(f"\n--- Generation {gen} ---")
@@ -128,7 +130,6 @@ def main():
             futures = {executor.submit(evaluate, shape, i, gen): shape for i, shape in todo}
             for future in concurrent.futures.as_completed(futures):
                 shape = futures[future]
-                # In the future, this is where we would send a web3 event "Miner returned L/D"
                 pass
                 
         # Calculate fitness
@@ -148,6 +149,20 @@ def main():
                 
             # Soft penalty for volume, doesn't completely overwhelm the fitness anymore
             s.fitness += 5.0 * max(0.0, 1.0 - area / MIN_AREA)
+            
+        # 1/5th success rule (Rechenberg)
+        if gen > 0 and todo:
+            evaluated_children = [s for _, s in todo]
+            # Since fitness is negative L/D, lower is better. We check if child is strictly better than the best parent
+            success_count = sum(1 for c in evaluated_children if c.fitness < c.parent_best_fitness)
+            success_rate = success_count / len(evaluated_children)
+            
+            if success_rate > 0.2:
+                mutation_scale *= 1.22
+            else:
+                mutation_scale *= 0.82
+            mutation_scale = max(0.1, min(mutation_scale, 2.0))
+            print(f"1/5th Rule: Success {success_rate*100:.0f}%, new mutation scale = {mutation_scale:.2f}")
                 
         # Sort by fitness (lower is better, since we use negative L/D)
         population.sort(key=lambda s: s.fitness)
@@ -187,9 +202,10 @@ def main():
                 w_a * parent1.alpha + (1 - w_a) * parent2.alpha,
                 w_c * parent1.camber + (1 - w_c) * parent2.camber
             )
+            child.parent_best_fitness = min(parent1.fitness, parent2.fitness)
             
             # Mutation
-            child.mutate()
+            child.mutate(scale=mutation_scale)
             next_population.append(child)
             
         population = next_population
