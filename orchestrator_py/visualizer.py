@@ -66,3 +66,4 @@ class Visualizer:
         plt.close()
         
         print(f"Rendered visualization to {save_path}")
+
