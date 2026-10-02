@@ -80,7 +80,15 @@ def main():
                 shape.drag = drag
                 shape.heatmap = csv_path
                 
-        # Sort by fitness (lower drag is better)
+        # Sort by fitness (lower drag is better). 
+        # Add a penalty if the shape becomes too thin (like a flat line) to simulate a minimum required volume (e.g. for fuel/passengers).
+        MIN_AREA = 250.0
+        for s in population:
+            # Approximate area
+            area = s.L * sum(s.t_pts) / len(s.t_pts)
+            if area < MIN_AREA:
+                s.drag += (MIN_AREA - area) * 0.05 # Add penalty for being too thin
+                
         population.sort(key=lambda s: s.drag)
         
         best_shape = population[0]
