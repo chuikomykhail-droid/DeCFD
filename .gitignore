@@ -1,0 +1,29 @@
+# Build artifacts
+*.exe
+*.obj
+*.o
+*.dll
+*.lib
+*.so
+*.dylib
+build/
+out/
+bin/
+
+# Visual Studio
+.vs/
+*.sln
+*.slnx
+*.suo
+*.user
+
+# Data and visualizations
+*.csv
+*.png
+*.jpg
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
