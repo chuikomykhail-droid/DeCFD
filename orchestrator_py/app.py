@@ -26,8 +26,8 @@ class Shape:
             self.L += random.gauss(0, 5)
             self.L = max(20.0, min(self.L, 80.0))
         
-        # Only mutate the middle 3 points. Nose (0) and Tail (4) stay 0.
-        for i in range(1, len(self.t_pts) - 1):
+        # Mutate all 5 points independently to allow the AI to discover the optimal nose/tail
+        for i in range(len(self.t_pts)):
             if random.random() < 0.3:
                 self.t_pts[i] += random.gauss(0, 3)
                 self.t_pts[i] = max(0.0, min(self.t_pts[i], 30.0))
@@ -50,8 +50,8 @@ class Shape:
 
 def create_random_shape():
     L = random.uniform(40, 70)
-    # Nose=0, Tail=0, 3 random middle points
-    t_pts = [0.0] + [random.uniform(5, 25) for _ in range(3)] + [0.0]
+    # 5 fully random thickness points! It starts as a "flying brick"
+    t_pts = [random.uniform(5, 25) for _ in range(5)]
     alpha = random.uniform(0, 10.0)
     camber = random.uniform(0, 5.0)
     return Shape(L, t_pts, alpha, camber)
@@ -200,3 +200,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
