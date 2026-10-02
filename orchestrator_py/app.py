@@ -8,11 +8,14 @@ from visualizer import Visualizer
 # Config
 WORKER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker_cpp', 'worker.exe'))
 
+import json
+
 class Shape:
     def __init__(self, L, t_pts):
         self.L = L # Length
         self.t_pts = t_pts # List of 5 thickness points
         self.drag = float('inf')
+        self.lift = 0.0
         self.heatmap = None
 
     def mutate(self):
@@ -36,18 +39,20 @@ def run_worker(shape, shape_id, gen):
     run_dir = os.path.join(os.path.dirname(__file__), f"run_g{gen}_s{shape_id}")
     os.makedirs(run_dir, exist_ok=True)
     
-    # Pass L and the 5 thickness points to C++
-    cmd = [WORKER_PATH, str(shape.L)] + [str(t) for t in shape.t_pts]
+    # Pass L, 5 thickness points, alpha=0, camber=0, and request csv
+    cmd = [WORKER_PATH, str(shape.L)] + [str(t) for t in shape.t_pts] + ["0.0", "0.0", "--csv", "u_mag.csv"]
     
     try:
         # Run C++ worker subprocess
         result = subprocess.run(cmd, cwd=run_dir, stdout=subprocess.PIPE, text=True, check=True)
-        # Parse drag from last line of stdout
-        drag = float(result.stdout.strip().split('\n')[-1])
-        return drag, os.path.join(run_dir, "u_mag.csv")
+        # Parse JSON output from stdout
+        output = json.loads(result.stdout.strip())
+        drag = output.get("cd", float('inf'))
+        lift = output.get("cl", 0.0)
+        return drag, lift, os.path.join(run_dir, "u_mag.csv")
     except Exception as e:
         print(f"Error running worker in {run_dir}: {e}")
-        return float('inf'), None
+        return float('inf'), 0.0, None
 
 def main():
     parser = argparse.ArgumentParser(description="DeCFD Genetic Algorithm Orchestrator")
@@ -76,8 +81,9 @@ def main():
             futures = {executor.submit(run_worker, shape, i, gen): shape for i, shape in enumerate(population)}
             for future in concurrent.futures.as_completed(futures):
                 shape = futures[future]
-                drag, csv_path = future.result()
+                drag, lift, csv_path = future.result()
                 shape.drag = drag
+                shape.lift = lift
                 shape.heatmap = csv_path
                 
         # Sort by fitness (lower drag is better). 
