@@ -1,7 +1,0 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
-  </Configurations>
-  <Project Path="DeCFD/DeCFD.vcxproj" Id="9b6e149a-9b41-43e9-9201-7f5eecd20399" />
-</Solution>
