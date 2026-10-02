@@ -60,7 +60,14 @@ class Visualizer:
         
         plt.tight_layout()
         save_path = os.path.join(self.results_dir, f"generation_{gen}.png")
-        plt.savefig(save_path, dpi=200)
+        try:
+            plt.savefig(save_path, dpi=200)
+        except OSError:
+            # If the user has the file open (e.g. in VS Code or Photo Viewer), Windows blocks overwriting it.
+            # We catch Errno 22 / 13 and save to a fallback name with a timestamp.
+            import time
+            save_path = os.path.join(self.results_dir, f"generation_{gen}_{int(time.time())}.png")
+            plt.savefig(save_path, dpi=200)
         plt.close()
         
         print(f"Rendered visualization to {save_path}")
