@@ -1,14 +1,14 @@
+import argparse
+import math
 import os
 import random
-import subprocess
-import concurrent.futures
-import argparse
-import json
-from visualizer import Visualizer
 
-# Config
-# Get path from env var if set, otherwise fallback to local exe
-WORKER_PATH = os.environ.get("WORKER_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker_cpp', 'worker.exe')))
+from network import ComputeNetwork
+from visualizer import Visualizer
+from worker_runner import RUNS_DIR, WORKER_PATH, run_worker, shape_args
+
+MIN_AREA = 250.0
+
 
 class Shape:
     def __init__(self, t_pts, alpha=0.0, camber=0.0):
@@ -24,6 +24,15 @@ class Shape:
         self.fitness = float('inf')
         self.heatmap = None
         self.parent_best_fitness = float('inf')
+
+        # Network bookkeeping (filled in by ComputeNetwork)
+        self.evaluated = False
+        self.verified = False
+        self.task_id = None
+        self.miner = None
+        self.args = None
+        self.result_hash = None
+        self.corrected = False  # True if the verifier replaced a fraudulent result
 
     def mutate(self, scale=1.0):
         # Mutate all 5 points independently to allow the AI to discover the optimal nose/tail
@@ -57,61 +66,43 @@ def create_random_shape():
     camber = random.uniform(0, 5.0)
     return Shape(t_pts, alpha, camber)
 
-def run_worker(shape, shape_id, gen, generate_csv=False):
-    run_dir = os.path.join(os.path.dirname(__file__), f"run_g{gen}_s{shape_id}")
-    os.makedirs(run_dir, exist_ok=True)
-    
-    # Pass exact string representations of the numbers for perfect reproducibility
-    cmd = [WORKER_PATH, str(shape.L)] + [str(t) for t in shape.t_pts] + [str(shape.alpha), str(shape.camber)]
-    if generate_csv:
-        cmd += ["--csv", "u_mag.csv"]
-    
-    # We restrict OpenMP to 1 thread so ThreadPoolExecutor can scale by core count efficiently
-    env = {**os.environ, "OMP_NUM_THREADS": "1"}
-    
-    try:
-        # Run C++ worker subprocess
-        result = subprocess.run(cmd, cwd=run_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, env=env, timeout=60)
-        # Parse JSON output from stdout
-        output = json.loads(result.stdout.strip())
-        drag = output.get("cd", float('inf'))
-        lift = output.get("cl", 0.0)
-        csv_path = os.path.join(run_dir, "u_mag.csv") if generate_csv else None
-        return drag, lift, csv_path
-    except subprocess.CalledProcessError as e:
-        print(f"Error running worker in {run_dir}. Exit code: {e.returncode}")
-        print(f"Stderr: {e.stderr}")
-        return float('inf'), 0.0, None
-    except subprocess.TimeoutExpired as e:
-        print(f"Worker timeout in {run_dir}.")
-        return float('inf'), 0.0, None
-    except Exception as e:
-        print(f"Error running worker in {run_dir}: {e}")
-        return float('inf'), 0.0, None
+def compute_fitness(s):
+    # Exact integral area for cosine interpolation: L * (t0 + 2*(t1+t2+t3) + t4) / 8
+    area = s.L * (s.t_pts[0] + 2 * sum(s.t_pts[1:4]) + s.t_pts[4]) / 8.0
 
-def evaluate(shape, shape_id, gen):
-    drag, lift, _ = run_worker(shape, shape_id, gen, generate_csv=False)
-    shape.drag = drag
-    shape.lift = lift
-    return shape
+    # We want to maximize Lift / Drag, which is equivalent to minimizing -(Lift / Drag).
+    if not math.isfinite(s.drag) or s.drag <= 0.001:
+        s.fitness = float('inf') # invalid / diverged
+        return
+    s.fitness = -(s.lift / s.drag)
+    # Soft penalty for volume, doesn't completely overwhelm the fitness anymore
+    s.fitness += 5.0 * max(0.0, 1.0 - area / MIN_AREA)
 
 def main():
     parser = argparse.ArgumentParser(description="DeCFD Genetic Algorithm Orchestrator")
     parser.add_argument('--pop', type=int, default=4, help='Population size per generation')
     parser.add_argument('--gen', type=int, default=3, help='Number of generations to run')
+    parser.add_argument('--miners', type=int, default=4, help='Number of mock miner nodes')
+    parser.add_argument('--cheaters', type=int, default=1, help='How many of the miners are lazy (fake results)')
+    parser.add_argument('--cheat-prob', type=float, default=0.5, help='Probability a lazy miner fakes a given task')
+    parser.add_argument('--verify-rate', type=float, default=0.2, help='Fraction of tasks randomly audited')
+    parser.add_argument('--seed', type=int, default=42, help='GA random seed')
+    parser.add_argument('--quiet-net', action='store_true', help='Hide per-task network log lines')
     args = parser.parse_args()
 
     POPULATION_SIZE = args.pop
     GENERATIONS = args.gen
 
-    if not os.path.exists(WORKER_PATH) and "WORKER_PATH" not in os.environ:
+    if not os.path.exists(WORKER_PATH):
         print(f"Worker not found at {WORKER_PATH}")
         print("Please compile the C++ worker first.")
         return
 
     # Seed for deterministic and reproducible demo
-    random.seed(42)
+    random.seed(args.seed)
 
+    net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
+                         verify_rate=args.verify_rate, verbose=not args.quiet_net)
     population = [create_random_shape() for _ in range(POPULATION_SIZE)]
     vis = Visualizer()
     
@@ -127,41 +118,29 @@ def main():
     for gen in range(GENERATIONS):
         print(f"\n--- Generation {gen} ---")
         
-        # Only evaluate shapes that haven't been evaluated yet
-        todo = [(i, shape) for i, shape in enumerate(population) if shape.fitness == float('inf')]
-        
-        # Evaluate fitness in parallel using ThreadPool
-        # We spawn exactly as many workers as CPU cores, and each C++ worker runs on 1 thread
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-            futures = {executor.submit(evaluate, shape, i, gen): shape for i, shape in todo}
-            for future in concurrent.futures.as_completed(futures):
-                shape = futures[future]
-                pass
-                
-        # Calculate fitness
-        MIN_AREA = 250.0
-        for s in population:
-            if s.fitness != float('inf'): # Already evaluated
-                continue
+        # Only evaluate shapes that haven't been evaluated yet (elite is carried over as-is,
+        # including a diverged one, so it is never recomputed)
+        todo = [s for s in population if not s.evaluated]
+        net.evaluate_batch(todo, gen)
 
-            # Exact integral area for cosine interpolation: L * (t0 + 2*(t1+t2+t3) + t4) / 8
-            area = s.L * (s.t_pts[0] + 2*sum(s.t_pts[1:4]) + s.t_pts[4]) / 8.0
+        for s in population:
+            compute_fitness(s)
+        population.sort(key=lambda s: s.fitness)
+
+        # Never accept an unverified leader: a faked L/D would otherwise become the elite forever
+        while not population[0].verified:
+            net.verify_many([population[0]], reason="leader check")
+            for s in population:
+                compute_fitness(s)
+            population.sort(key=lambda s: s.fitness)
             
-            # We want to maximize Lift / Drag, which is equivalent to minimizing -(Lift / Drag).
-            if s.drag <= 0.001 or s.drag == float('inf'):
-                s.fitness = float('inf') # invalid / diverged
-            else:
-                s.fitness = -(s.lift / s.drag)
-                
-            # Soft penalty for volume, doesn't completely overwhelm the fitness anymore
-            s.fitness += 5.0 * max(0.0, 1.0 - area / MIN_AREA)
-            
-        # 1/5th success rule (Rechenberg) with Windowing
-        if gen > 0 and todo:
-            evaluated_children = [s for _, s in todo]
+        # 1/5th success rule (Rechenberg) with Windowing.
+        # Only real children count: random immigrants have no parents (parent_best_fitness = inf)
+        children = [s for s in todo if math.isfinite(s.parent_best_fitness)]
+        if children:
             # Since fitness is negative L/D, lower is better
-            success_count = sum(1 for c in evaluated_children if c.fitness < c.parent_best_fitness)
-            success_rate = success_count / len(evaluated_children)
+            success_count = sum(1 for c in children if c.fitness < c.parent_best_fitness)
+            success_rate = success_count / len(children)
             succ_hist.append(success_rate)
             
             if len(succ_hist) % WINDOW == 0:
@@ -172,11 +151,9 @@ def main():
                     mutation_scale *= 0.87
                 mutation_scale = max(SCALE_MIN, min(mutation_scale, SCALE_MAX))
                 print(f"1/5th Rule Window: Avg Success {p*100:.0f}%, new mutation scale = {mutation_scale:.2f}")
-                
-        # Sort by fitness (lower is better, since we use negative L/D)
-        population.sort(key=lambda s: s.fitness)
         
         best_shape = population[0]
+        paid = net.finalize_epoch(gen)
         
         # Track stagnation
         if best_shape.fitness < best_ever_fitness - 1e-4:
@@ -185,16 +162,25 @@ def main():
         else:
             gens_without_improvement += 1
         
-        # Re-run best shape to get CSV for heatmap!
-        _, _, csv_path = run_worker(best_shape, "best", gen, generate_csv=True)
-        best_shape.heatmap = csv_path
+        # Re-run the (verified) best shape locally to get the CSV for the heatmap
+        best_dir = os.path.join(RUNS_DIR, f"best_g{gen}")
+        res = run_worker(shape_args(best_shape), run_dir=best_dir, extra_args=["--csv", "u_mag.csv"])
+        best_shape.heatmap = os.path.join(best_dir, "u_mag.csv") if res.get("status") == "ok" else None
         
         best_drags.append(best_shape.fitness)
-        t_str = ", ".join([f"{t:.1f}" for t in best_shape.t_pts])
-        print(f"Best: L/D={(-best_shape.fitness):.3f} (Drag={best_shape.drag:.5f}, Lift={best_shape.lift:.5f}) | L={best_shape.L:.1f}, alpha={best_shape.alpha:.1f}, c={best_shape.camber:.1f}")
+        if best_shape.corrected:
+            source = f"verifier (fraud by {best_shape.miner.name} corrected)"
+        else:
+            source = f"{best_shape.miner.name if best_shape.miner else '-'} [verified]"
+        print(f"Best: L/D={(-best_shape.fitness):.3f} (Drag={best_shape.drag:.5f}, Lift={best_shape.lift:.5f}) | "
+              f"L={best_shape.L:.1f}, alpha={best_shape.alpha:.1f}, c={best_shape.camber:.1f} | "
+              f"by {source} | epoch paid {paid}")
         
         # Visualize best shape of the generation
         vis.render_generation(gen, best_shape, best_drags)
+
+        if gen == GENERATIONS - 1:
+            break
 
         # Evolution (Tournament + Crossover)
         next_population = [best_shape] # Elitism (keep the best)
@@ -239,34 +225,24 @@ def main():
         population = next_population
         
     print("\nEvolution complete! Check the 'orchestrator_py/results' folder for visualizations.")
+    net.report()
     
     print("\n--- Running High-Fidelity Verification on Best Shape ---")
-    best_overall = min(population, key=lambda s: s.fitness)
+    best_overall = population[0]
     print(f"Candidate: L={best_overall.L:.1f}, Thick={best_overall.t_pts}, alpha={best_overall.alpha:.1f}, c={best_overall.camber:.1f}")
-    
-    run_dir = os.path.join(os.path.dirname(__file__), "run_verification")
-    os.makedirs(run_dir, exist_ok=True)
-    cmd = [
-        WORKER_PATH, str(best_overall.L)
-    ] + [str(t) for t in best_overall.t_pts] + [
-        str(best_overall.alpha), str(best_overall.camber), 
-        "--steps", "30000", "--avg", "20000", "--csv", "u_mag_verified.csv"
-    ]
-    
-    env = {**os.environ, "OMP_NUM_THREADS": "1"}
-    try:
-        print("Running long simulation (30,000 steps)... this may take a minute.")
-        result = subprocess.run(cmd, cwd=run_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, env=env)
-        output = json.loads(result.stdout.strip())
-        v_drag = output.get("cd", float('inf'))
-        v_lift = output.get("cl", 0.0)
-        v_ld = v_lift / v_drag if v_drag > 0.001 else 0
-        print(f"Verification Result:")
-        print(f"  Short Run (6k steps) L/D: {-best_overall.fitness:.3f}")
-        print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
-        print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
-    except Exception as e:
-        print("Verification failed.")
+    print("Running long simulation (30,000 steps, all cores)... this may take a minute.")
+    res = run_worker(shape_args(best_overall), run_dir=os.path.join(RUNS_DIR, "verification"),
+                     extra_args=["--steps", "30000", "--avg", "20000", "--csv", "u_mag_verified.csv"],
+                     timeout=None, threads=None)
+    if res.get("status") != "ok":
+        print(f"Verification failed: {res}")
+        return
+    v_drag, v_lift = res["cd"], res["cl"]
+    v_ld = v_lift / v_drag if v_drag > 0.001 else 0
+    print("Verification Result:")
+    print(f"  Short Run (6k steps) L/D: {best_overall.lift / best_overall.drag:.3f}")
+    print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
+    print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
 
 if __name__ == "__main__":
     main()

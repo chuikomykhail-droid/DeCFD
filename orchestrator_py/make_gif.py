@@ -68,3 +68,4 @@ def create_gif():
 
 if __name__ == "__main__":
     create_gif()
+
