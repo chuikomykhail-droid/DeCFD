@@ -1,16 +1,20 @@
 """ComputeNetwork: the orchestrator's only entry point to "the network".
 
-Flow per generation (epoch):
-  1. create_task for every new shape (client escrows the reward)
-  2. tasks are dispatched round-robin to active miners, computed in parallel
-  3. miners submit a result hash (commitment) + the values
-  4. optimistic verification: a random sample (verify_rate) is re-computed by a verifier;
-     the GA additionally forces verification of the generation leader before accepting it
-  5. a mismatch slashes the miner's stake; all of that miner's other unverified work
-     in the current epoch is re-audited
-  6. finalize_epoch pays every surviving task
+Flow:
+  open_job       the client escrows the budget for the whole optimization run
+  per generation (epoch):
+    1. create_task for every new shape (reserves one reward from the job)
+    2. tasks are dispatched round-robin to active miners, computed in parallel
+    3. miners submit a result hash (commitment) + the values
+    4. optimistic verification: a random sample (verify_rate) is re-computed by the verifier;
+       the GA additionally forces verification of the generation leader before accepting it
+    5. a mismatch slashes the miner's stake (part of it rewards the verifier); all of that
+       miner's other unverified work in the current epoch is re-audited
+    6. finalize_epoch settles every task of the epoch (pays the survivors)
+  close_job      the unspent budget returns to the client
 
-Swapping this class for a real Solana client later should not require touching the GA.
+All chain access goes through a `Ledger` (network/ledger.py), so swapping the mock for a
+Solana backend does not touch this class or the GA.
 """
 import json
 import os
@@ -19,8 +23,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from worker_runner import WORKER_PATH, file_hash, result_hash, run_worker, sha256_hex, shape_args
 
-from .ledger import MockSolanaProgram, new_pubkey, short
+from .ledger import create_ledger
 from .miner import Miner
+from .wallet import MockWallet, short
 
 
 def _threads_per_task(n_tasks):
@@ -38,38 +43,58 @@ def _apply_result(shape, res):
         shape.lift = 0.0
 
 
+def _ld(shape):
+    return shape.lift / shape.drag if shape.drag not in (0, float("inf")) else 0.0
+
+
 class ComputeNetwork:
     def __init__(self, n_miners=4, n_cheaters=1, verify_rate=0.2, cheat_prob=0.5, seed=7,
-                 reward=10, stake=100, min_stake=50, slash_frac=0.5, log_dir=None, verbose=True):
+                 reward=10, stake=100, min_stake=50, slash_frac=0.5, verifier_share=0.5,
+                 client_funds=100_000, sim_args=(), ledger="mock", log_dir=None, verbose=True):
         if n_cheaters >= n_miners:
             raise ValueError("Need at least one honest miner")
         self.rng = random.Random(seed)  # separate RNG: network randomness must not perturb the GA
         self.verify_rate = verify_rate
         self.reward = reward
-        self.min_stake = min_stake
-        self.slash_frac = slash_frac
+        self.sim_args = list(sim_args)  # solver settings shared by every task of the job
         self.verbose = verbose
 
         self.log_dir = log_dir or os.path.join(os.path.dirname(os.path.dirname(__file__)), "network_logs")
         os.makedirs(self.log_dir, exist_ok=True)
-        self.ledger = MockSolanaProgram(os.path.join(self.log_dir, "ledger_tx.jsonl"), self.rng)
+        self.ledger = create_ledger(ledger, log_dir=self.log_dir)
 
-        # Every task pins the exact binary: bit-exact verification only holds for identical builds
+        # Every job pins the exact binary: bit-exact verification only holds for identical builds
         self.binary_hash = file_hash(WORKER_PATH)
-        self.verifier = new_pubkey(self.rng)
+        self.client = MockWallet(self.rng, "client")
+        self.verifier = MockWallet(self.rng, "verifier")
+        self.ledger.initialize(self.client, self.verifier.pubkey, min_stake,
+                               int(slash_frac * 10_000), int(verifier_share * 10_000))
+        self.ledger.airdrop(self.client.pubkey, client_funds)
 
         self.miners = []
         n_honest = n_miners - n_cheaters
         for i in range(n_miners):
             honest = i < n_honest
-            m = Miner(f"miner-{i + 1}", new_pubkey(self.rng), honest=honest,
+            m = Miner(f"miner-{i + 1}", MockWallet(self.rng, f"miner-{i + 1}"), honest=honest,
                       cheat_prob=0.0 if honest else cheat_prob)
             self.miners.append(m)
-            self.ledger.register_miner(m.pubkey, m.name, stake)
+            self.ledger.airdrop(m.pubkey, stake)
+            self.ledger.register_miner(m.wallet, m.name, stake)
 
+        # Who is who, for the dashboard (the chain only knows public keys)
+        participants = {self.client.pubkey: {"role": "client", "name": "client"},
+                        self.verifier.pubkey: {"role": "verifier", "name": "verifier"}}
+        for m in self.miners:
+            participants[m.pubkey] = {"role": "miner", "name": m.name, "honest": m.honest}
+        with open(os.path.join(self.log_dir, "participants.json"), "w", encoding="utf-8") as f:
+            json.dump({"cluster": self.ledger.cluster, "program_id": self.ledger.program_id,
+                       "participants": participants}, f, indent=2)
+
+        self.job_id = None
+        self.refund = None
         self._rr = 0
         self._seq = 0
-        self._pending = []  # shapes computed in the current (not yet finalized) epoch
+        self._pending = []  # shapes computed in the current (not yet settled) epoch
         self.stats = {"tasks": 0, "audits": 0, "caught": 0}
 
     # ------------------------------------------------------------------ helpers
@@ -77,13 +102,18 @@ class ComputeNetwork:
         if self.verbose:
             print(msg)
 
-    def _status(self, miner):
-        return self.ledger.miners[miner.pubkey]["status"]
-
     def active_miners(self):
-        return [m for m in self.miners if self._status(m) == "active"]
+        return [m for m in self.miners if self.ledger.miner_account(m.pubkey)["status"] == "active"]
+
+    def task_args(self, shape):
+        """The exact worker command line of a task: shape parameters + the job's solver settings."""
+        return shape_args(shape) + self.sim_args
 
     # --------------------------------------------------------------- public API
+    def open_job(self, budget):
+        self.job_id = "job-1"
+        self.ledger.create_job(self.client, self.job_id, budget, self.reward, self.binary_hash)
+
     def evaluate_batch(self, shapes, gen):
         """Compute drag/lift for every shape through the network. Mutates the shapes."""
         if not shapes:
@@ -92,10 +122,11 @@ class ComputeNetwork:
             active = self.active_miners()
             if not active:
                 raise RuntimeError("All miners are banned, the network cannot process tasks")
-            s.args = shape_args(s)
+            s.args = self.task_args(s)
             s.task_id = f"g{gen}-t{self._seq:04d}"
             self._seq += 1
-            self.ledger.create_task(s.task_id, sha256_hex(" ".join(s.args).encode()), self.binary_hash, self.reward)
+            self.ledger.create_task(self.client, self.job_id, s.task_id,
+                                    sha256_hex(" ".join(s.args).encode()), gen)
             s.miner = active[self._rr % len(active)]
             self._rr += 1
 
@@ -106,13 +137,12 @@ class ComputeNetwork:
                 s = futures[f]
                 res = f.result()
                 s.result_hash = result_hash(s.task_id, res)
-                self.ledger.submit_result(s.task_id, s.miner.pubkey, s.result_hash)
+                self.ledger.submit_result(s.miner.wallet, s.task_id, s.result_hash)
                 _apply_result(s, res)
                 s.evaluated = True
                 s.verified = False
-                ld = s.lift / s.drag if s.drag not in (0, float("inf")) else 0.0
-                self._log(f"  [slot {self.ledger.slot:05d}] {s.task_id} <- {s.miner.name} "
-                          f"({short(s.miner.pubkey)})  L/D={ld:6.3f}  hash={s.result_hash[:10]}")
+                self._log(f"  [slot {self.ledger.current_slot():05d}] {s.task_id} <- {s.miner.name} "
+                          f"({short(s.miner.pubkey)})  L/D={_ld(s):6.3f}  hash={s.result_hash[:10]}")
 
         self.stats["tasks"] += len(shapes)
         self._pending.extend(shapes)
@@ -135,8 +165,7 @@ class ComputeNetwork:
             newly_caught = set()
             for s, ref in zip(todo, refs):
                 ref_hash = result_hash(s.task_id, ref)
-                ok = self.ledger.resolve_challenge(s.task_id, self.verifier, ref_hash,
-                                                   self.slash_frac, self.min_stake)
+                ok = self.ledger.resolve_challenge(self.verifier, s.task_id, ref_hash)
                 s.verified = True
                 self.stats["audits"] += 1
                 if ok:
@@ -144,15 +173,14 @@ class ComputeNetwork:
                     continue
                 caught_total += 1
                 self.stats["caught"] += 1
-                acc = self.ledger.miners[s.miner.pubkey]
-                fake_ld = s.lift / s.drag if s.drag not in (0, float("inf")) else 0.0
+                acc = self.ledger.miner_account(s.miner.pubkey)
+                fake_ld = _ld(s)
                 _apply_result(s, ref)
                 s.result_hash = ref_hash
                 s.corrected = True
-                true_ld = s.lift / s.drag if s.drag not in (0, float("inf")) else 0.0
                 # Always shown, even with --quiet-net: catching fraud is the point of the demo
                 print(f"  [FRAUD] {s.task_id} by {s.miner.name}: claimed L/D={fake_ld:.3f}, "
-                      f"real L/D={true_ld:.3f}. Slashed -> stake {acc['stake']}"
+                      f"real L/D={_ld(s):.3f}. Slashed -> stake {acc['stake']}"
                       f"{'  >>> BANNED' if acc['status'] == 'banned' else ''}  [{reason}]")
                 newly_caught.add(s.miner)
 
@@ -164,9 +192,14 @@ class ComputeNetwork:
         return caught_total
 
     def finalize_epoch(self, gen):
-        paid = self.ledger.finalize_epoch(gen)
+        """End of the challenge window: settle every task of the epoch. Returns the total paid."""
+        paid = sum(self.ledger.settle_task(self.client, s.task_id) for s in self._pending)
         self._pending = []
         return paid
+
+    def close_job(self):
+        self.refund = self.ledger.close_job(self.client, self.job_id)
+        return self.refund
 
     # ------------------------------------------------------------------ reports
     def report(self):
@@ -174,11 +207,16 @@ class ComputeNetwork:
         with open(os.path.join(self.log_dir, "ledger_state.json"), "w", encoding="utf-8") as f:
             json.dump(snap, f, indent=2)
 
+        job = snap["jobs"].get(self.job_id, {})
         print("\n=== Network report ===")
-        print(f"Program {snap['program_id'][:12]}..  slot {snap['slot']}  binary {self.binary_hash[:12]}..")
+        print(f"Program {snap['program_id'][:12]}.. ({snap['cluster']})  slot {snap['slot']}  "
+              f"binary {self.binary_hash[:12]}..")
         print(f"Tasks: {self.stats['tasks']}  audits: {self.stats['audits']}  fraud caught: {self.stats['caught']}")
-        print(f"Balances: client={snap['balances']['client']}  escrow={snap['balances']['escrow']}  "
-              f"treasury(slashed)={snap['balances']['treasury']}")
+        paid = sum(m["earned"] for m in snap["miners"].values())
+        print(f"Job {self.job_id}: budget {job.get('budget')}  paid to miners {paid}  "
+              f"refunded {self.refund}  status {job.get('status')}")
+        print(f"Balances: client={snap['wallets'].get(self.client.pubkey, 0)}  "
+              f"verifier={snap['wallets'].get(self.verifier.pubkey, 0)}  treasury={snap['treasury']}")
         print(f"{'miner':<9} {'pubkey':<11} {'type':<7} {'tasks':>5} {'earned':>7} {'stake':>6} "
               f"{'caught':>6} {'faked':>6} {'status':<7}")
         for m in self.miners:
@@ -195,4 +233,3 @@ class ComputeNetwork:
             print(msg)
         print(f"Ledger log: {os.path.join(self.log_dir, 'ledger_tx.jsonl')}")
         self.ledger.close()
-

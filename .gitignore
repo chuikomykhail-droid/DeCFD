@@ -27,8 +27,8 @@ worker_cpp/worker
 *.jpg
 *.gif
 # ...except the images the README shows
-!docs/*.png
-!docs/*.gif
+!docs/**/*.png
+!docs/**/*.gif
 
 # Orchestrator run artifacts
 orchestrator_py/runs/
@@ -36,6 +36,7 @@ orchestrator_py/run_*/
 orchestrator_py/network_logs/
 orchestrator_py/results/
 orchestrator_py/old/
+validation/runs/
 
 # Python
 __pycache__/

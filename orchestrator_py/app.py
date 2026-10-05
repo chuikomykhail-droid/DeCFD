@@ -123,6 +123,9 @@ def main():
     parser.add_argument('--verify-rate', type=float, default=0.2, help='Fraction of tasks randomly audited')
     parser.add_argument('--parent-audit', action='store_true',
                         help='Also audit every unverified tournament winner before it reproduces (~2.5x more audits)')
+    parser.add_argument('--steps', type=int, default=6000, help='LBM steps per evaluation (job-wide solver setting)')
+    parser.add_argument('--avg', type=int, default=2000, help='Steps averaged for the forces (job-wide solver setting)')
+    parser.add_argument('--ledger', choices=['mock'], default='mock', help='Chain backend (a Solana devnet backend plugs in here)')
     parser.add_argument('--seed', type=int, default=42, help='GA random seed')
     parser.add_argument('--quiet-net', action='store_true', help='Hide per-task network log lines (fraud events are still shown)')
     args = parser.parse_args()
@@ -144,9 +147,12 @@ def main():
     print(f"Run folder: {run_dir}")
 
     net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
-                         verify_rate=args.verify_rate, log_dir=os.path.join(run_dir, "network"),
-                         verbose=not args.quiet_net)
-    history["config"]["binary_hash"] = net.binary_hash
+                         verify_rate=args.verify_rate, sim_args=["--steps", str(args.steps), "--avg", str(args.avg)],
+                         ledger=args.ledger, log_dir=os.path.join(run_dir, "network"), verbose=not args.quiet_net)
+    # Budget for the worst case: every shape of every generation is a new task
+    net.open_job(budget=POPULATION_SIZE * GENERATIONS * net.reward)
+    history["config"].update(binary_hash=net.binary_hash, cluster=net.ledger.cluster,
+                             program_id=net.ledger.program_id, job_id=net.job_id)
     population = [create_random_shape() for _ in range(POPULATION_SIZE)]
     vis = Visualizer(os.path.join(run_dir, "frames"))
 
@@ -231,7 +237,7 @@ def main():
 
         # Re-run the (verified) best shape locally to get the CSV for the heatmap
         best_dir = os.path.join(run_dir, "fields", f"best_g{gen:03d}")
-        res = run_worker(shape_args(best_shape), run_dir=best_dir, extra_args=["--csv", "u_mag.csv"], threads=None)
+        res = run_worker(net.task_args(best_shape), run_dir=best_dir, extra_args=["--csv", "u_mag.csv"], threads=None)
         best_shape.heatmap = os.path.join(best_dir, "u_mag.csv") if res.get("status") == "ok" else None
 
         ld_history.append(best_shape.ld)
@@ -282,6 +288,7 @@ def main():
         population = next_population
 
     print(f"\nEvolution complete! Results: {run_dir}")
+    net.close_job()
     net.report()
 
     print("\n--- Running High-Fidelity Verification on Best Shape ---")
@@ -300,7 +307,7 @@ def main():
                                "short_ld": best_overall.ld}
     write_json(history_path, history)
     print("Verification Result:")
-    print(f"  Short Run (6k steps) L/D: {best_overall.ld:.3f}")
+    print(f"  Short Run ({args.steps} steps) L/D: {best_overall.ld:.3f}")
     print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
     print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
     print(f"\nMake the GIF with: python orchestrator_py/make_gif.py {run_dir}")

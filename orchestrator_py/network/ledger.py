@@ -1,143 +1,109 @@
-"""Mock of the on-chain DeCFD program.
+"""The DeCFD on-chain program, as seen by the coordinator.
 
-The structure deliberately mirrors what an Anchor program on Solana would look like,
-so this file is the spec for the future smart contract:
+`Ledger` is the only boundary between the compute network and the blockchain. The mock
+(`mock_ledger.MockSolanaProgram`) implements it in memory; a devnet backend will implement
+the same methods by sending Anchor instructions. Nothing above this interface (the GA,
+ComputeNetwork, the dashboard) needs to change when the backend does.
 
-  Accounts:  Client (job poster), Escrow (task rewards), Treasury (slashed stake),
-             MinerAccount {stake, earned, slashed, status}, TaskAccount {params_hash, result_hash, status}
-  Instructions:
-             register_miner, create_task, submit_result, resolve_challenge, finalize_epoch
+Accounts (all amounts are integer base units, like lamports):
+  Config        verifier, min_stake, slash_bps, verifier_share_bps     (set once by `initialize`)
+  Job           client, budget, escrow, reserved, reward, binary_hash, tasks, status
+  MinerAccount  stake, earned, slashed, tasks, caught, status (active | banned)
+  TaskAccount   job, epoch, params_hash, reward, miner, result_hash,
+                status: open -> submitted -> (verified) -> finalized, or rejected
+  Treasury      the part of slashed stake that does not go to the verifier
 
-Every instruction is appended to a JSONL transaction log with a slot number and a
-signature-like hash, so the demo can show a "block explorer" view.
+Instructions (every one is signed by a wallet and appended to the event log):
+  initialize(admin, verifier, min_stake, slash_bps, verifier_share_bps)
+  register_miner(miner, name, stake)          stake moves from the miner's wallet
+  create_job(client, job_id, budget, reward, binary_hash)   budget moves into job escrow
+  create_task(client, job_id, task_id, params_hash, epoch)  reserves one reward
+  submit_result(miner, task_id, result_hash)  commitment to the result
+  resolve_challenge(verifier, task_id, verifier_hash)
+        match    -> verified
+        mismatch -> slash stake (verifier_share to the verifier, rest to treasury),
+                    release the reward back to the job, ban below min_stake
+  settle_task(signer, task_id)                pay a submitted/verified task (permissionless crank)
+  close_job(client, job_id)                   refund unreserved escrow to the client
+
+One instruction touches a bounded set of accounts, so each maps to a single Solana
+instruction (unlike a loop over all tasks of an epoch).
+
+Event log: one JSON object per instruction, `{"sig", "slot", "ix", "signer", ...fields}`,
+written to `ledger_tx.jsonl`. The dashboard reads only this log plus `snapshot()`, so a
+devnet backend writes the same records with real transaction signatures.
 """
-import hashlib
-import json
-import threading
+from abc import ABC, abstractmethod
 
-_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+TASK_STATUSES = ("open", "submitted", "verified", "rejected", "finalized")
 
 
-def b58encode(b: bytes) -> str:
-    n = int.from_bytes(b, "big")
-    s = ""
-    while n:
-        n, r = divmod(n, 58)
-        s = _B58[r] + s
-    pad = len(b) - len(b.lstrip(b"\0"))
-    return "1" * pad + s
+class LedgerError(RuntimeError):
+    """An instruction the program would reject (wrong signer, wrong state, no funds)."""
 
 
-def new_pubkey(rng) -> str:
-    return b58encode(bytes(rng.getrandbits(8) for _ in range(32)))
+class Ledger(ABC):
+    cluster = "abstract"
+    program_id = ""
 
+    # ------------------------------------------------------------------ instructions
+    @abstractmethod
+    def initialize(self, admin, verifier_pubkey, min_stake, slash_bps, verifier_share_bps): ...
 
-def short(pk: str) -> str:
-    return f"{pk[:4]}..{pk[-4:]}"
+    @abstractmethod
+    def register_miner(self, miner, name, stake): ...
 
+    @abstractmethod
+    def create_job(self, client, job_id, budget, reward, binary_hash): ...
 
-class MockSolanaProgram:
-    PROGRAM_ID = "DeCFD" + "1" * 39
+    @abstractmethod
+    def create_task(self, client, job_id, task_id, params_hash, epoch): ...
 
-    def __init__(self, log_path, rng, client_funds=100_000):
-        self._lock = threading.RLock()
-        self.slot = 0
-        self.client = new_pubkey(rng)
-        self.balances = {"client": client_funds, "escrow": 0, "treasury": 0}
-        self.miners = {}  # pubkey -> MinerAccount
-        self.tasks = {}   # task_id -> TaskAccount
-        self._log = open(log_path, "w", encoding="utf-8")
+    @abstractmethod
+    def submit_result(self, miner, task_id, result_hash): ...
 
-    # ------------------------------------------------------------------ internals
-    def _tx(self, ix, signer, **data):
-        self.slot += 1
-        record = {"slot": self.slot, "ix": ix, "signer": signer, **data}
-        sig = b58encode(hashlib.sha256(json.dumps(record, sort_keys=True).encode()).digest())
-        self._log.write(json.dumps({"sig": sig, **record}) + "\n")
-        self._log.flush()
-        return sig
+    @abstractmethod
+    def resolve_challenge(self, verifier, task_id, verifier_hash):
+        """Returns True if the miner's commitment matched."""
 
-    # --------------------------------------------------------------- instructions
-    def register_miner(self, pubkey, name, stake):
-        with self._lock:
-            self.miners[pubkey] = {
-                "name": name, "stake": stake, "earned": 0, "slashed": 0,
-                "tasks": 0, "caught": 0, "status": "active",
-            }
-            return self._tx("register_miner", pubkey, name=name, stake=stake)
+    @abstractmethod
+    def settle_task(self, signer, task_id):
+        """Returns the reward paid (0 for a rejected task)."""
 
-    def create_task(self, task_id, params_hash, binary_hash, reward):
-        with self._lock:
-            if self.balances["client"] < reward:
-                raise RuntimeError("Client account has insufficient funds for task escrow")
-            self.balances["client"] -= reward
-            self.balances["escrow"] += reward
-            self.tasks[task_id] = {
-                "params_hash": params_hash, "binary_hash": binary_hash, "reward": reward,
-                "status": "open", "miner": None, "result_hash": None,
-            }
-            return self._tx("create_task", self.client, task=task_id,
-                            params_hash=params_hash[:16], binary_hash=binary_hash[:16], reward=reward)
+    @abstractmethod
+    def close_job(self, client, job_id):
+        """Returns the refund paid to the client."""
 
-    def submit_result(self, task_id, miner, result_hash):
-        with self._lock:
-            t = self.tasks[task_id]
-            if t["status"] != "open":
-                raise RuntimeError(f"Task {task_id} is not open")
-            if self.miners[miner]["status"] != "active":
-                raise RuntimeError(f"Miner {short(miner)} is not active")
-            t.update(status="submitted", miner=miner, result_hash=result_hash)
-            self.miners[miner]["tasks"] += 1
-            return self._tx("submit_result", miner, task=task_id, result_hash=result_hash[:16])
+    # ------------------------------------------------------------------ queries
+    @abstractmethod
+    def miner_account(self, pubkey) -> dict: ...
 
-    def resolve_challenge(self, task_id, verifier, verifier_hash, slash_frac, min_stake):
-        """Verifier re-ran the task. Matching hash -> verified. Mismatch -> slash the miner,
-        refund the client, ban the miner if its stake drops below min_stake."""
-        with self._lock:
-            t = self.tasks[task_id]
-            m = self.miners[t["miner"]]
-            if verifier_hash == t["result_hash"]:
-                t["status"] = "verified"
-                self._tx("verify_ok", verifier, task=task_id)
-                return True
+    @abstractmethod
+    def task_account(self, task_id) -> dict: ...
 
-            penalty = int(m["stake"] * slash_frac)
-            m["stake"] -= penalty
-            m["slashed"] += penalty
-            m["caught"] += 1
-            self.balances["treasury"] += penalty
-            self.balances["escrow"] -= t["reward"]
-            self.balances["client"] += t["reward"]
-            t["status"] = "rejected"
-            if m["stake"] < min_stake:
-                m["status"] = "banned"
-            self._tx("slash", verifier, task=task_id, miner=t["miner"], penalty=penalty,
-                     expected=verifier_hash[:16], got=t["result_hash"][:16], banned=m["status"] == "banned")
-            return False
+    @abstractmethod
+    def job_account(self, job_id) -> dict: ...
 
-    def finalize_epoch(self, epoch):
-        """End of the challenge window: pay out every submitted/verified task."""
-        with self._lock:
-            paid = 0
-            for t in self.tasks.values():
-                if t["status"] in ("submitted", "verified"):
-                    self.miners[t["miner"]]["earned"] += t["reward"]
-                    self.balances["escrow"] -= t["reward"]
-                    t["status"] = "finalized"
-                    paid += t["reward"]
-            self._tx("finalize_epoch", self.client, epoch=epoch, paid=paid)
-            return paid
+    @abstractmethod
+    def balance(self, pubkey) -> int: ...
 
-    # -------------------------------------------------------------------- queries
-    def snapshot(self):
-        with self._lock:
-            return {
-                "program_id": self.PROGRAM_ID, "slot": self.slot, "client": self.client,
-                "balances": dict(self.balances),
-                "miners": {k: dict(v) for k, v in self.miners.items()},
-                "tasks": {k: dict(v) for k, v in self.tasks.items()},
-            }
+    @abstractmethod
+    def current_slot(self) -> int: ...
+
+    @abstractmethod
+    def snapshot(self) -> dict: ...
+
+    # ------------------------------------------------------------------ test-network helpers
+    def airdrop(self, pubkey, amount):
+        """Fund a wallet (devnet has requestAirdrop; mainnet would not)."""
+        raise NotImplementedError
 
     def close(self):
-        self._log.close()
+        pass
 
+
+def create_ledger(kind, **kwargs):
+    if kind == "mock":
+        from .mock_ledger import MockSolanaProgram
+        return MockSolanaProgram(**kwargs)
+    raise ValueError(f"Unknown ledger backend '{kind}' (available: mock)")

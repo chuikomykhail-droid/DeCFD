@@ -161,7 +161,11 @@ static void apply_bc(real* const* d, const real* feq_in) {
     }
 }
 
-struct Shape { double L, T[5], alpha_deg, camber; };
+struct Shape {
+    double L, T[5], alpha_deg, camber;
+    bool cylinder;   // validation mode: circle of diameter L instead of the airfoil
+    double yshift;   // body centre offset from the channel centreline, cells
+};
 
 static bool build_geometry(const Shape& sh, std::vector<real>& sol,
                            std::vector<int>& smin, std::vector<int>& smax) {
@@ -176,13 +180,15 @@ static bool build_geometry(const Shape& sh, std::vector<real>& sol,
     for (int r = 0; r < Ny; ++r) {
         const int row = r + 1;
         for (int x = 0; x < Nx; ++x) {
-            const double dx = x - (double)(XCEN), dy = r - (double)(YCEN);
+            const double dx = x - (double)(XCEN), dy = r - (double)(YCEN) - sh.yshift;
             const double xb = ca * dx - sa * dy;       // world -> body frame
             const double yb = sa * dx + ca * dy;
             const double s = xb + sh.L / 2.0;
 
             bool is_s = false;
-            if (s >= 0.0 && s <= sh.L) {
+            if (sh.cylinder) {
+                is_s = dx * dx + dy * dy <= 0.25 * sh.L * sh.L;
+            } else if (s >= 0.0 && s <= sh.L) {
                 const int nseg = 4;
                 const double seg_len = sh.L / nseg;
                 const int seg = std::min((int)(s / seg_len), nseg - 1);
@@ -206,8 +212,8 @@ static bool build_geometry(const Shape& sh, std::vector<real>& sol,
     return count > 0;
 }
 
-static void write_fields(const char* csv, const char* vort, real* const* f, const std::vector<real>& sol) {
-    std::vector<float> ux(PLANE, 0.f), uy(PLANE, 0.f);
+static void velocity(real* const* f, const std::vector<real>& sol, std::vector<float>& ux, std::vector<float>& uy) {
+    ux.assign(PLANE, 0.f); uy.assign(PLANE, 0.f);
     for (int r = 1; r <= Ny; ++r)
         for (int x = 0; x < Nx; ++x) {
             const size_t p = (size_t)r * Nx + x;
@@ -216,6 +222,45 @@ static void write_fields(const char* csv, const char* vort, real* const* f, cons
             for (int i = 0; i < Q; ++i) { const double v = f[i][p]; rho += v; jx += CX[i] * v; jy += CY[i] * v; }
             ux[p] = (float)(jx / rho); uy[p] = (float)(jy / rho);
         }
+}
+
+static inline float vorticity_at(const std::vector<float>& ux, const std::vector<float>& uy,
+                                 const std::vector<real>& sol, int r, int x) {
+    const size_t p = (size_t)r * Nx + x;
+    if (x > 0 && x < Nx - 1 && r > 1 && r < Ny && sol[p] <= HALF)
+        return 0.5f * (uy[p + 1] - uy[p - 1]) - 0.5f * (ux[p + Nx] - ux[p - Nx]);
+    return 0.f;
+}
+
+static void write_csv(const char* path, const std::vector<float>& v, const char* fmt) {
+    FILE* o = std::fopen(path, "w");
+    if (!o) return;
+    for (int r = Ny; r >= 1; --r)
+        for (int x = 0; x < Nx; ++x) {
+            std::fprintf(o, fmt, v[(size_t)r * Nx + x]);
+            std::fputc(x + 1 < Nx ? ',' : '\n', o);
+        }
+    std::fclose(o);
+}
+
+// Vorticity snapshot as raw float32, Ny rows top to bottom x Nx columns (same layout as the CSVs)
+static void write_vort_bin(const char* path, real* const* f, const std::vector<real>& sol) {
+    std::vector<float> ux, uy, w((size_t)Nx * Ny);
+    velocity(f, sol, ux, uy);
+    for (int r = Ny; r >= 1; --r)
+        for (int x = 0; x < Nx; ++x) w[(size_t)(Ny - r) * Nx + x] = vorticity_at(ux, uy, sol, r, x);
+    FILE* o = std::fopen(path, "wb");
+    if (!o) return;
+    std::fwrite(w.data(), sizeof(float), w.size(), o);
+    std::fclose(o);
+}
+
+static void write_fields(const char* csv, const char* vort, const char* ux_csv, const char* uy_csv,
+                         real* const* f, const std::vector<real>& sol) {
+    std::vector<float> ux, uy;
+    velocity(f, sol, ux, uy);
+    if (ux_csv) write_csv(ux_csv, ux, "%.6f");
+    if (uy_csv) write_csv(uy_csv, uy, "%.6f");
 
     if (csv) {
         FILE* o = std::fopen(csv, "w");
@@ -233,13 +278,8 @@ static void write_fields(const char* csv, const char* vort, real* const* f, cons
         FILE* o = std::fopen(vort, "w");
         if (o) {
             for (int r = Ny; r >= 1; --r) {
-                for (int x = 0; x < Nx; ++x) {
-                    const size_t p = (size_t)r * Nx + x;
-                    float w = 0.f;
-                    if (x > 0 && x < Nx - 1 && r > 1 && r < Ny && sol[p] <= HALF)
-                        w = 0.5f * (uy[p + 1] - uy[p - 1]) - 0.5f * (ux[p + Nx] - ux[p - Nx]);
-                    std::fprintf(o, "%.5f%c", w, x + 1 < Nx ? ',' : '\n');
-                }
+                for (int x = 0; x < Nx; ++x)
+                    std::fprintf(o, "%.5f%c", vorticity_at(ux, uy, sol, r, x), x + 1 < Nx ? ',' : '\n');
             }
             std::fclose(o);
         }
@@ -250,8 +290,10 @@ struct Link { uint32_t p; uint32_t j; };
 
 int main(int argc, char** argv) {
     std::vector<double> pos;
-    int steps = 6000, avg = 2000; double tau = 0.6, uin = 0.1;
-    const char *csv = nullptr, *vort = nullptr; bool verbose = false;
+    int steps = 6000, avg = 2000, snap_every = 0; double tau = 0.6, uin = 0.1, yshift = 0.0;
+    const char *csv = nullptr, *vort = nullptr, *ux_csv = nullptr, *uy_csv = nullptr;
+    const char *history = nullptr, *snap_prefix = nullptr;
+    bool verbose = false, cylinder = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -262,23 +304,42 @@ int main(int argc, char** argv) {
         else if (a == "--uin")     uin = std::atof(next());
         else if (a == "--csv")     csv = next();
         else if (a == "--vort")    vort = next();
+        else if (a == "--ux")      ux_csv = next();
+        else if (a == "--uy")      uy_csv = next();
+        else if (a == "--history") history = next();
+        else if (a == "--snap-every")  snap_every = std::atoi(next());
+        else if (a == "--snap-prefix") snap_prefix = next();
+        else if (a == "--yshift")  yshift = std::atof(next());
+        else if (a == "--cylinder") cylinder = true;
         else if (a == "--verbose") verbose = true;
         else if (a.rfind("--", 0) == 0) { std::fprintf(stderr, "unknown flag %s\n", a.c_str()); return 2; }
         else pos.push_back(std::atof(a.c_str()));
     }
 
-    if (pos.size() < 6) {
-        std::fprintf(stderr, "usage: %s L t0 t1 t2 t3 t4 [alpha_deg] [camber] [--steps N] [--avg N] [--tau T] [--uin U] [--csv f] [--vort f]\n", argv[0]);
+    if (pos.size() < (cylinder ? 1u : 6u)) {
+        std::fprintf(stderr,
+            "usage: %s L t0 t1 t2 t3 t4 [alpha_deg] [camber] [options]\n"
+            "       %s --cylinder D [options]\n"
+            "options: --steps N --avg N --tau T --uin U --yshift Y\n"
+            "         --csv f (|u|) --vort f --ux f --uy f --history f (fx,fy per averaged step)\n"
+            "         --snap-every N --snap-prefix P (float32 vorticity snapshots during averaging)\n",
+            argv[0], argv[0]);
         return 2;
     }
 
-    Shape sh; sh.L = pos[0];
-    for (int i = 0; i < 5; ++i) sh.T[i] = pos[1 + i];
-    sh.alpha_deg = pos.size() > 6 ? pos[6] : 0.0;
-    sh.camber    = pos.size() > 7 ? pos[7] : 0.0;
+    Shape sh = {};
+    sh.L = pos[0];
+    sh.cylinder = cylinder;
+    sh.yshift = yshift;
+    if (!cylinder) {
+        for (int i = 0; i < 5; ++i) sh.T[i] = pos[1 + i];
+        sh.alpha_deg = pos.size() > 6 ? pos[6] : 0.0;
+        sh.camber    = pos.size() > 7 ? pos[7] : 0.0;
+    }
 
     if (!(sh.L >= 4.0) || sh.L > 0.6 * Nx) { std::fprintf(stderr, "bad chord\n"); return 2; }
     for (int i = 0; i < 5; ++i) if (!(sh.T[i] >= 0.0)) { std::fprintf(stderr, "bad thickness\n"); return 2; }
+    if (snap_every < 0 || (snap_every > 0 && !snap_prefix)) { std::fprintf(stderr, "--snap-every needs --snap-prefix\n"); return 2; }
     if (steps < 1 || avg < 1 || avg > steps || !(tau > 0.5) || !(uin > 0.0 && uin < 0.2)) { std::fprintf(stderr, "bad numeric options\n"); return 2; }
 
     std::vector<real> sol; std::vector<int> smin, smax;
@@ -332,6 +393,12 @@ int main(int argc, char** argv) {
                 fy += 2.0 * g * CY[l.j];
             }
             hx.push_back(fx); hy.push_back(fy);
+            const int k = it - (steps - avg);
+            if (snap_every > 0 && k % snap_every == 0) {
+                char path[1024];
+                std::snprintf(path, sizeof path, "%s_%05d.bin", snap_prefix, k / snap_every);
+                write_vort_bin(path, dst, sol);
+            }
         }
         std::swap(src, dst);
     }
@@ -354,10 +421,19 @@ int main(int argc, char** argv) {
     if (!std::isfinite(fx) || !std::isfinite(fy)) { std::fprintf(stderr, "diverged (NaN)\n"); return 4; }
 
     const double q = 0.5 * uin * uin * sh.L;
-    std::printf("{\"fx\":%.9g,\"fy\":%.9g,\"cd\":%.9g,\"cl\":%.9g,\"fx_spread\":%.3g,\"fy_spread\":%.3g,\"steps\":%d,\"avg\":%d}\n",
-                fx, fy, fx / q, fy / q, sx, sy, steps, avg);
+    std::printf("{\"fx\":%.9g,\"fy\":%.9g,\"cd\":%.9g,\"cl\":%.9g,\"fx_spread\":%.3g,\"fy_spread\":%.3g,\"steps\":%d,\"avg\":%d,\"nx\":%d,\"ny\":%d}\n",
+                fx, fy, fx / q, fy / q, sx, sy, steps, avg, Nx, Ny);
 
-    if (csv || vort) write_fields(csv, vort, const_cast<real* const*>(src), sol);
+    if (history) {
+        FILE* o = std::fopen(history, "w");
+        if (o) {
+            std::fprintf(o, "step,fx,fy\n");
+            for (size_t k = 0; k < hx.size(); ++k)
+                std::fprintf(o, "%d,%.9g,%.9g\n", steps - avg + (int)k + 1, hx[k], hy[k]);
+            std::fclose(o);
+        }
+    }
+    if (csv || vort || ux_csv || uy_csv) write_fields(csv, vort, ux_csv, uy_csv, const_cast<real* const*>(src), sol);
     if (verbose) {
         const double mlups = (double)Nx * Ny * steps / secs / 1e6;
         std::fprintf(stderr, "grid %dx%d, %d steps, %.2f s, %.1f MLUPS, %zu links, real=%zu bytes\n",

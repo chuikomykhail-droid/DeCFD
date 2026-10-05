@@ -8,12 +8,16 @@ from worker_runner import run_worker
 
 
 class Miner:
-    def __init__(self, name, pubkey, honest=True, cheat_prob=0.0):
+    def __init__(self, name, wallet, honest=True, cheat_prob=0.0):
         self.name = name
-        self.pubkey = pubkey
+        self.wallet = wallet
         self.honest = honest
         self.cheat_prob = cheat_prob
         self.faked_tasks = set()  # ground truth, used only for the end-of-run report
+
+    @property
+    def pubkey(self):
+        return self.wallet.pubkey
 
     def compute(self, task_id, args, threads=1):
         if not self.honest:
@@ -26,4 +30,3 @@ class Miner:
                 cl = r.uniform(0.5, 2.0)
                 return {"status": "ok", "fx": cd * 0.25, "fy": cl * 0.25, "cd": cd, "cl": cl}
         return run_worker(args, threads=threads)
-
