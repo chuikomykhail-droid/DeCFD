@@ -23,6 +23,12 @@ from .ledger import MockSolanaProgram, new_pubkey, short
 from .miner import Miner
 
 
+def _threads_per_task(n_tasks):
+    # Worker results are bit-identical for any thread count, so split the cores between
+    # concurrent runs: a lone audit then uses the whole machine instead of a single core
+    return max(1, (os.cpu_count() or 1) // n_tasks)
+
+
 def _apply_result(shape, res):
     if res.get("status") == "ok":
         shape.drag = res["cd"]
@@ -93,8 +99,9 @@ class ComputeNetwork:
             s.miner = active[self._rr % len(active)]
             self._rr += 1
 
+        threads = _threads_per_task(len(shapes))
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as ex:
-            futures = {ex.submit(s.miner.compute, s.task_id, s.args): s for s in shapes}
+            futures = {ex.submit(s.miner.compute, s.task_id, s.args, threads): s for s in shapes}
             for f in as_completed(futures):
                 s = futures[f]
                 res = f.result()
@@ -121,8 +128,9 @@ class ComputeNetwork:
         caught_total = 0
         todo = [s for s in shapes if not s.verified]
         while todo:
+            threads = _threads_per_task(len(todo))
             with ThreadPoolExecutor(max_workers=os.cpu_count()) as ex:
-                refs = list(ex.map(lambda s: run_worker(s.args), todo))
+                refs = list(ex.map(lambda s: run_worker(s.args, threads=threads), todo))
 
             newly_caught = set()
             for s, ref in zip(todo, refs):
@@ -142,9 +150,10 @@ class ComputeNetwork:
                 s.result_hash = ref_hash
                 s.corrected = True
                 true_ld = s.lift / s.drag if s.drag not in (0, float("inf")) else 0.0
-                self._log(f"  [FRAUD] {s.task_id} by {s.miner.name}: claimed L/D={fake_ld:.3f}, "
-                          f"real L/D={true_ld:.3f}. Slashed -> stake {acc['stake']}"
-                          f"{'  >>> BANNED' if acc['status'] == 'banned' else ''}  [{reason}]")
+                # Always shown, even with --quiet-net: catching fraud is the point of the demo
+                print(f"  [FRAUD] {s.task_id} by {s.miner.name}: claimed L/D={fake_ld:.3f}, "
+                      f"real L/D={true_ld:.3f}. Slashed -> stake {acc['stake']}"
+                      f"{'  >>> BANNED' if acc['status'] == 'banned' else ''}  [{reason}]")
                 newly_caught.add(s.miner)
 
             # A caught miner's other unverified work in this epoch can't be trusted either
@@ -182,7 +191,7 @@ class ComputeNetwork:
         if faked:
             msg = f"Faked results: {len(faked)}, undetected: {len(undetected)}"
             if undetected:
-                msg += " (never the generation leader and outside the random audit sample)"
+                msg += " (missed by the random audit and never forced into a leader/parent check)"
             print(msg)
         print(f"Ledger log: {os.path.join(self.log_dir, 'ledger_tx.jsonl')}")
         self.ledger.close()

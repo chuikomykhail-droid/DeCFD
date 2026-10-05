@@ -10,7 +10,8 @@ import subprocess
 
 WORKER_PATH = os.environ.get(
     "WORKER_PATH",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "worker_cpp", "worker.exe")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "worker_cpp",
+                                 "worker.exe" if os.name == "nt" else "worker")),
 )
 RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
 
@@ -36,7 +37,7 @@ def file_hash(path: str) -> str:
     return h.hexdigest()
 
 
-def run_worker(args, run_dir=None, extra_args=(), timeout=60, threads=1):
+def run_worker(args, run_dir=None, extra_args=(), timeout=300, threads=1):
     """Run the worker and return a dict: {"status": "ok", fx, fy, cd, cl, ...}
     or {"status": "error", "code": ...}. Never raises on worker failure."""
     run_dir = run_dir or RUNS_DIR

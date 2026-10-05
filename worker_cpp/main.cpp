@@ -67,7 +67,9 @@ static inline void row_kernel(const real* const* s, real* const* d, const real* 
     real* __restrict d6 = d[6]; real* __restrict d7 = d[7]; real* __restrict d8 = d[8];
     const real* __restrict sl = sol;
 
+#if defined(__GNUC__)
 #pragma GCC ivdep
+#endif
     for (int x = xb; x < xe; ++x) {
         const size_t p = r0 + x;
         real f0 = s0[p];

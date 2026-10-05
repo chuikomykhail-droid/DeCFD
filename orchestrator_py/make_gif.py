@@ -1,71 +1,62 @@
-import os
+"""Stitch the per-generation frames of a run into an animated GIF.
+
+    python orchestrator_py/make_gif.py              # latest run in orchestrator_py/runs
+    python orchestrator_py/make_gif.py <run_dir>    # a specific run
+"""
+import argparse
 import glob
-import re
+import os
+import sys
+
 try:
     from PIL import Image
 except ImportError:
     print("Pillow library is required. Please install it using: pip install Pillow")
-    exit(1)
+    sys.exit(1)
 
-def create_gif():
-    results_dir = os.path.join(os.path.dirname(__file__), "results")
-    
-    # Find all generation PNGs
-    files = glob.glob(os.path.join(results_dir, "generation_*.png"))
+from runs import latest_run_dir
+
+
+def create_gif(run_dir, width=900, duration=600):
+    # Frame names are zero-padded (generation_007.png), so a plain sort is generation order
+    files = sorted(glob.glob(os.path.join(run_dir, "frames", "generation_*.png")))
     if not files:
-        print("No generation images found in results/ folder.")
-        return
-        
-    # Extract generation number to sort them properly
-    def get_gen_num(filename):
-        basename = os.path.basename(filename)
-        # Matches "generation_5.png" or "generation_5_1639920.png"
-        match = re.search(r'generation_(\d+)', basename)
-        if match:
-            return int(match.group(1))
-        return -1
+        print(f"No generation frames found in {os.path.join(run_dir, 'frames')}")
+        return None
 
-    # Filter and sort files by generation number
-    files = [f for f in files if get_gen_num(f) != -1]
-    files.sort(key=get_gen_num)
-    
-    # Handle duplicates (if visualizer used the fallback saving mechanism with timestamps)
-    # We keep the latest one for each generation
-    unique_files = {}
-    for f in files:
-        gen = get_gen_num(f)
-        unique_files[gen] = f
-            
-    sorted_files = [unique_files[g] for g in sorted(unique_files.keys())]
-    
-    print(f"Found {len(sorted_files)} frames. Stitching into GIF...")
-    
-    # Load images
+    print(f"Found {len(files)} frames. Stitching into GIF...")
     images = []
-    for f in sorted_files:
-        try:
-            images.append(Image.open(f))
-        except Exception as e:
-            print(f"Error loading {f}: {e}")
-            
-    if not images:
-        print("No valid images to process.")
-        return
-        
-    # Save as animated GIF
-    gif_path = os.path.join(results_dir, "evolution_animation.gif")
-    
-    # Save the first image, and append the rest
+    for f in files:
+        with Image.open(f) as im:
+            # Full-size frames are 2000x2400; downscale so the GIF stays a few MB at most
+            h = round(im.height * width / im.width)
+            images.append(im.convert("RGB").resize((width, h), Image.LANCZOS))
+
+    gif_path = os.path.join(run_dir, "evolution.gif")
     images[0].save(
         gif_path,
         save_all=True,
         append_images=images[1:],
-        duration=600,  # 600 milliseconds per frame
-        loop=0         # 0 means loop infinitely
+        duration=duration,  # milliseconds per frame
+        loop=0              # 0 means loop infinitely
     )
-    
-    print(f"Success! 🚀 GIF saved to: {gif_path}")
+    print(f"Success! GIF saved to: {gif_path}")
+    return gif_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Make an evolution GIF from a DeCFD run folder")
+    parser.add_argument("run_dir", nargs="?", help="Run folder (default: the latest run)")
+    parser.add_argument("--width", type=int, default=900, help="GIF width in pixels")
+    parser.add_argument("--duration", type=int, default=600, help="Milliseconds per frame")
+    args = parser.parse_args()
+
+    run_dir = args.run_dir or latest_run_dir()
+    if not run_dir or not os.path.isdir(run_dir):
+        print("No run folder found. Run app.py first, or pass a run folder explicitly.")
+        sys.exit(1)
+    create_gif(run_dir, args.width, args.duration)
+
 
 if __name__ == "__main__":
-    create_gif()
-
+    main()

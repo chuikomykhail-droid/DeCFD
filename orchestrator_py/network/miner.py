@@ -15,7 +15,7 @@ class Miner:
         self.cheat_prob = cheat_prob
         self.faked_tasks = set()  # ground truth, used only for the end-of-run report
 
-    def compute(self, task_id, args):
+    def compute(self, task_id, args, threads=1):
         if not self.honest:
             # Seeded by task + miner so the run is reproducible
             r = random.Random(f"{task_id}:{self.pubkey}")
@@ -25,5 +25,5 @@ class Miner:
                 cd = r.uniform(0.25, 0.6)
                 cl = r.uniform(0.5, 2.0)
                 return {"status": "ok", "fx": cd * 0.25, "fy": cl * 0.25, "cd": cd, "cl": cl}
-        return run_worker(args)
+        return run_worker(args, threads=threads)
 
