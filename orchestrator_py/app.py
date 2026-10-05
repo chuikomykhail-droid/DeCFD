@@ -2,10 +2,12 @@ import argparse
 import math
 import os
 import random
+import time
 
 from network import ComputeNetwork
 from runs import new_run_dir, write_json
-from visualizer import Visualizer
+from report import build_report
+from visualizer import Visualizer, csv_to_npz
 from worker_runner import WORKER_PATH, run_worker, shape_args
 
 MIN_AREA = 250.0
@@ -143,7 +145,9 @@ def main():
 
     run_dir = new_run_dir(args.seed)
     history_path = os.path.join(run_dir, "history.json")
-    history = {"run": os.path.basename(run_dir), "config": dict(vars(args)), "generations": [], "verification": None}
+    history = {"run": os.path.basename(run_dir), "config": dict(vars(args)), "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "finished": False, "generations": [], "verification": None}
+    t_start = time.time()
     print(f"Run folder: {run_dir}")
 
     net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
@@ -156,7 +160,6 @@ def main():
     population = [create_random_shape() for _ in range(POPULATION_SIZE)]
     vis = Visualizer(os.path.join(run_dir, "frames"))
 
-    ld_history = []
     mutation_scale = 1.0
     succ_hist = []
     best_ever_fitness = float('inf')
@@ -235,12 +238,16 @@ def main():
 
         paid = net.finalize_epoch(gen)
 
-        # Re-run the (verified) best shape locally to get the CSV for the heatmap
-        best_dir = os.path.join(run_dir, "fields", f"best_g{gen:03d}")
-        res = run_worker(net.task_args(best_shape), run_dir=best_dir, extra_args=["--csv", "u_mag.csv"], threads=None)
-        best_shape.heatmap = os.path.join(best_dir, "u_mag.csv") if res.get("status") == "ok" else None
+        # Re-run the (verified) best shape locally to keep its flow field
+        fields_dir = os.path.join(run_dir, "fields")
+        tmp = os.path.join(fields_dir, "tmp")
+        res = run_worker(net.task_args(best_shape), run_dir=tmp, extra_args=["--ux", "ux.csv", "--uy", "uy.csv"],
+                         threads=None)
+        field = None
+        if res.get("status") == "ok":
+            field = csv_to_npz(os.path.join(tmp, "ux.csv"), os.path.join(tmp, "uy.csv"),
+                               os.path.join(fields_dir, f"best_g{gen:03d}.npz"))
 
-        ld_history.append(best_shape.ld)
         if best_shape.corrected:
             source = f"verifier (fraud by {best_shape.miner.name} corrected)"
         else:
@@ -249,14 +256,15 @@ def main():
               f"L={best_shape.L:.1f}, alpha={best_shape.alpha:.1f}, c={best_shape.camber:.1f} | "
               f"by {source} | epoch paid {paid}")
 
-        # Visualize best shape of the generation
-        frame = vis.render_generation(gen, best_shape, ld_history)
+        # One frame per generation: the best shape's flow field
+        frame = vis.render_field(gen, best_shape.ld, field)
 
         history["generations"].append({
             "gen": gen, "best": shape_record(best_shape), "mutation_scale": mutation_scale,
             "epoch_paid": paid, "population_ld": [round(s.ld, 4) for s in population],
-            "frame": os.path.relpath(frame, run_dir),
-            "field": os.path.relpath(best_shape.heatmap, run_dir) if best_shape.heatmap else None,
+            "elapsed": round(time.time() - t_start, 1),
+            "frame": os.path.relpath(frame, run_dir).replace(os.sep, "/"),
+            "field": os.path.relpath(field, run_dir).replace(os.sep, "/") if field else None,
         })
         write_json(history_path, history)
 
@@ -296,21 +304,24 @@ def main():
     print(f"Candidate: L={best_overall.L:.1f}, Thick={best_overall.t_pts}, alpha={best_overall.alpha:.1f}, c={best_overall.camber:.1f}")
     print("Running long simulation (30,000 steps, all cores)... this may take a minute.")
     res = run_worker(shape_args(best_overall), run_dir=os.path.join(run_dir, "verification"),
-                     extra_args=["--steps", "30000", "--avg", "20000", "--csv", "u_mag_verified.csv"],
-                     timeout=None, threads=None)
+                     extra_args=["--steps", "30000", "--avg", "20000"], timeout=None, threads=None)
     if res.get("status") != "ok":
         print(f"Verification failed: {res}")
-        return
-    v_drag, v_lift = res["cd"], res["cl"]
-    v_ld = v_lift / v_drag if v_drag > 0.001 else 0
-    history["verification"] = {"steps": 30000, "avg": 20000, "cd": v_drag, "cl": v_lift, "ld": v_ld,
-                               "short_ld": best_overall.ld}
+    else:
+        v_drag, v_lift = res["cd"], res["cl"]
+        v_ld = v_lift / v_drag if v_drag > 0.001 else 0
+        history["verification"] = {"steps": 30000, "avg": 20000, "cd": v_drag, "cl": v_lift, "ld": v_ld,
+                                   "short_ld": best_overall.ld}
+        print("Verification Result:")
+        print(f"  Short Run ({args.steps} steps) L/D: {best_overall.ld:.3f}")
+        print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
+        print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
+    history["finished"] = True
+    history["elapsed"] = round(time.time() - t_start, 1)
     write_json(history_path, history)
-    print("Verification Result:")
-    print(f"  Short Run ({args.steps} steps) L/D: {best_overall.ld:.3f}")
-    print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
-    print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
-    print(f"\nMake the GIF with: python orchestrator_py/make_gif.py {run_dir}")
+
+    print("\n--- Building the report ---")
+    build_report(run_dir)
 
 if __name__ == "__main__":
     main()

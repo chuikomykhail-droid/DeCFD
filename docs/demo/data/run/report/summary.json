@@ -1,0 +1,48 @@
+{
+  "run": "20261005-145234_seed42",
+  "finished": true,
+  "elapsed_s": 599.3,
+  "generations": 20,
+  "best": {
+    "L": 60.0,
+    "t_pts": [
+      1.069,
+      4.527,
+      6.003,
+      5.003,
+      6.0
+    ],
+    "alpha": 13.08,
+    "camber": 1.688,
+    "cd": 0.459319875,
+    "cl": 1.04083422,
+    "ld": 2.266033491365903,
+    "fitness": -2.266033491365903,
+    "task_id": "g16-t0182",
+    "miner": "miner-3",
+    "verified": true,
+    "corrected": false,
+    "found_in_generation": 16
+  },
+  "first_ld": 0.7970673699054058,
+  "improvement_pct": 184.29635648424934,
+  "verification": {
+    "short_ld": 2.266033491365903,
+    "long_ld": 2.278574164069415,
+    "steps": 30000,
+    "diff_pct": 0.5534195655666485
+  },
+  "network": {
+    "tasks": 221,
+    "audits": 61,
+    "fraud_caught": 3,
+    "slashed": 87,
+    "to_verifier": 43,
+    "budget": 2400,
+    "paid_to_miners": 2180,
+    "refunded": 220,
+    "banned": [
+      "miner-4"
+    ]
+  }
+}

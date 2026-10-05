@@ -7,9 +7,10 @@ Flow past a circular cylinder is the standard benchmark for a 2D incompressible 
 Every case runs at two resolutions (D = 20 and 40 cells) in the same physical domain
 (50 D x 20 D, free-slip side walls, 5% blockage), so the report also shows grid convergence.
 
-    python validation/cylinder.py             # full study, ~45 min on a 12-thread laptop
-    python validation/cylinder.py --quick     # D = 20 only, ~7 min
-    python validation/cylinder.py --report    # re-plot from saved runs without re-running
+    python validation/cylinder.py                  # full study, ~1 h on a 12-thread laptop
+    python validation/cylinder.py --d 20           # D = 20 only, ~12 min
+    python validation/cylinder.py --d 40 --re 100  # any subset
+    python validation/cylinder.py --report         # re-plot from saved runs without re-running
 
 Needs the bigger-grid worker builds:
     powershell -ExecutionPolicy Bypass -File build.ps1 -NX 1000 -NY 400 -Out worker_1000x400.exe
@@ -33,7 +34,11 @@ RUNS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
 OUT = os.path.join(ROOT, "docs", "validation")
 EXE = ".exe" if os.name == "nt" else ""
 
-U = 0.1                         # inlet velocity, lattice units (Mach 0.17)
+# Inlet velocity per Reynolds number, lattice units. At Re = 100 and Mach 0.17 the shedding
+# frequency sits at 1.14x the channel's first transverse acoustic mode, c_s / 2H (the walls
+# reflect sound perfectly), and the lift locks into that resonance. Mach 0.087 moves it to
+# 0.57x, clear of the mode, and also halves the compressibility error.
+U_CASE = {20: 0.1, 40: 0.1, 100: 0.05}
 GRIDS = {20: (1000, 400), 40: (2000, 800)}   # D -> (NX, NY): domain 50 D x 20 D
 REYNOLDS = (20, 40, 100)
 # Run length in convective times D/U: steady cases need the wake to settle; the
@@ -68,11 +73,12 @@ TIME_SCALE = 1.0   # --scale: shorten every run (pipeline smoke test only)
 
 
 def case_params(D, Re):
+    U = U_CASE[Re]
     nu = U * D / Re
     total, averaged = DURATION[Re]
     steps = int(TIME_SCALE * total * D / U)
     avg = int(TIME_SCALE * averaged * D / U)
-    return {"D": D, "Re": Re, "tau": 0.5 + 3.0 * nu, "steps": steps, "avg": avg,
+    return {"D": D, "Re": Re, "U": U, "tau": 0.5 + 3.0 * nu, "steps": steps, "avg": avg,
             "yshift": 0.025 * D}   # small offset from the centreline triggers shedding
 
 
@@ -85,7 +91,7 @@ def run_case(D, Re, snapshots=False):
     d = os.path.join(RUNS, case_name(D, Re))
     os.makedirs(d, exist_ok=True)
     cmd = [exe, "--cylinder", str(D), "--yshift", str(p["yshift"]), "--tau", f"{p['tau']:.6f}",
-           "--uin", str(U), "--steps", str(p["steps"]), "--avg", str(p["avg"]),
+           "--uin", str(p["U"]), "--steps", str(p["steps"]), "--avg", str(p["avg"]),
            "--history", "history.csv", "--ux", "ux.csv", "--uy", "uy.csv", "--vort", "vort.csv"]
     print(f"{case_name(D, Re)}: tau={p['tau']:.4f}, {p['steps']} steps ...", flush=True)
     r = subprocess.run(cmd, cwd=d, capture_output=True, text=True)
@@ -97,7 +103,7 @@ def run_case(D, Re, snapshots=False):
 
     if snapshots:
         # Separate short run for the animation: two shedding periods, 30 frames each
-        period = D / (0.165 * U)
+        period = D / (0.165 * p["U"])
         avg = int(2 * period)
         every = max(1, int(period / 30))
         a = os.path.join(RUNS, case_name(D, Re) + "_anim")
@@ -105,7 +111,7 @@ def run_case(D, Re, snapshots=False):
         for f in glob.glob(os.path.join(a, "vort_*.bin")):
             os.remove(f)
         cmd = [exe, "--cylinder", str(D), "--yshift", str(p["yshift"]), "--tau", f"{p['tau']:.6f}",
-               "--uin", str(U), "--steps", str(p["steps"] - p["avg"] + avg), "--avg", str(avg),
+               "--uin", str(p["U"]), "--steps", str(p["steps"] - p["avg"] + avg), "--avg", str(avg),
                "--snap-every", str(every), "--snap-prefix", "vort"]
         print(f"{case_name(D, Re)}: animation run ...", flush=True)
         r = subprocess.run(cmd, cwd=a, capture_output=True, text=True)
@@ -130,7 +136,7 @@ def recirculation_length(ux, D, nx, ny, yshift):
     return float("nan")
 
 
-def shedding(history, D):
+def shedding(history, D, U):
     """Strouhal number from upward zero crossings of the lift; mean drag; lift amplitude."""
     q = 0.5 * U * U * D
     cl = history[:, 2] / q
@@ -163,11 +169,12 @@ def analyse(D, Re):
     with open(os.path.join(d, "result.json")) as f:
         saved = json.load(f)
     p, w = saved["params"], saved["worker"]
-    out = {"D": D, "Re": Re, "tau": p["tau"], "steps": p["steps"],
+    U = p.setdefault("U", 0.1)   # runs from before per-case velocities used 0.1
+    out = {"D": D, "Re": Re, "U": U, "tau": p["tau"], "steps": p["steps"],
            "cd": w["cd"], "cd_spread": w["fx_spread"] / (0.5 * U * U * D)}
     if Re == 100:
         hist = np.loadtxt(os.path.join(d, "history.csv"), delimiter=",", skiprows=1)
-        out.update(shedding(hist, D))
+        out.update(shedding(hist, D, U))
     else:
         ux = np.loadtxt(os.path.join(d, "ux.csv"), delimiter=",")
         out["lr"] = recirculation_length(ux, D, w["nx"], w["ny"], p["yshift"])
@@ -191,7 +198,7 @@ def style(ax):
 
 def fig_wakes(results):
     """Steady wakes at Re = 20 and 40 (finest grid): streamlines over the streamwise velocity."""
-    D = max(r["D"] for r in results)
+    D = max(r["D"] for r in results if r["Re"] == 40)
     fig, axs = plt.subplots(1, 2, figsize=(12, 3.6))
     for ax, Re in zip(axs, (20, 40)):
         d = os.path.join(RUNS, case_name(D, Re))
@@ -204,7 +211,7 @@ def fig_wakes(results):
         X, Y = np.meshgrid((np.arange(x0, x1) - xc) / D, (np.arange(y0, y1) - yc) / D)
         sub_u, sub_v = ux[y0:y1, x0:x1], uy[y0:y1, x0:x1]
         # Zero (white) splits forward flow from the recirculation bubble (blue)
-        im = ax.pcolormesh(X, Y, sub_u / U, cmap=VORT_CMAP, shading="auto",
+        im = ax.pcolormesh(X, Y, sub_u / U_CASE[Re], cmap=VORT_CMAP, shading="auto",
                            norm=TwoSlopeNorm(vcenter=0.0, vmin=-0.3, vmax=1.3))
         ax.streamplot(X, Y, sub_u, sub_v, color=INK, linewidth=0.6, density=1.4, arrowsize=0.6)
         ax.add_patch(plt.Circle((0, 0), 0.5, color="#b4b2a9", zorder=3))
@@ -223,9 +230,10 @@ def fig_wakes(results):
 
 def fig_shedding(results):
     """Lift and drag history at Re = 100 (finest grid)."""
-    D = max(r["D"] for r in results)
+    D = max(r["D"] for r in results if r["Re"] == 100)
     d = os.path.join(RUNS, case_name(D, 100))
     h = np.loadtxt(os.path.join(d, "history.csv"), delimiter=",", skiprows=1)
+    U = U_CASE[100]
     q = 0.5 * U * U * D
     t = h[:, 0] * U / D
     last = t > t[-1] - 30                                  # last 30 convective times
@@ -245,10 +253,10 @@ def fig_shedding(results):
 
 
 def fig_vortex_street(results):
-    D = max(r["D"] for r in results)
+    D = max(r["D"] for r in results if r["Re"] == 100)
     w = np.loadtxt(os.path.join(RUNS, case_name(D, 100), "vort.csv"), delimiter=",")
     ny, nx = w.shape
-    lim = 0.5 * U / D * 4
+    lim = 2 * U_CASE[100] / D
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.imshow(w, cmap=VORT_CMAP, vmin=-lim, vmax=lim, origin="upper",
               extent=[-0.3 * nx / D, 0.7 * nx / D, -ny / 2 / D, ny / 2 / D])
@@ -264,13 +272,13 @@ def fig_vortex_street(results):
     return path
 
 
-def gif_vortex_street(D=20, width=900):
+def gif_vortex_street(D=20, width=720):
     from PIL import Image
     files = sorted(glob.glob(os.path.join(RUNS, case_name(D, 100) + "_anim", "vort_*.bin")))
     if not files:
         return None
     nx, ny = GRIDS[D]
-    lim = 0.5 * U / D * 4
+    lim = 2 * U_CASE[100] / D
     x0, x1 = int(0.3 * nx - 3 * D), int(0.3 * nx + 30 * D)
     y0, y1 = int(ny / 2 - 5 * D), int(ny / 2 + 5 * D)
     frames = []
@@ -278,7 +286,9 @@ def gif_vortex_street(D=20, width=900):
         w = np.fromfile(f, dtype=np.float32).reshape(ny, nx)[y0:y1, x0:x1]
         rgb = (VORT_CMAP(np.clip((w / lim + 1) / 2, 0, 1))[:, :, :3] * 255).astype(np.uint8)
         im = Image.fromarray(rgb)
-        frames.append(im.resize((width, round(width * im.height / im.width)), Image.LANCZOS))
+        im = im.resize((width, round(width * im.height / im.width)), Image.LANCZOS)
+        # A small palette without dithering keeps smooth colour fields compact
+        frames.append(im.quantize(colors=48, dither=Image.Dither.NONE))
     path = os.path.join(OUT, "vortex_street.gif")
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=50, loop=0)
     return path
@@ -293,11 +303,17 @@ def write_report(results, figures):
         "halfway bounce-back) simulates the textbook benchmark for 2D incompressible solvers and",
         "is compared with published values for an unbounded cylinder.",
         "",
-        "**Setup.** Domain 50 D × 20 D, cylinder 15 D from the inlet, uniform inlet velocity",
-        f"U = {U} (Mach 0.17), zero-gradient outlet, free-slip side walls (blockage D/H = 5%).",
-        "The cylinder sits 0.025 D off the centreline so that the Re = 100 wake starts shedding",
-        "without an artificial kick. Each case runs at D = 20 and D = 40 cells in the same",
-        "physical domain.",
+        "**Setup.** Domain 50 D × 20 D, cylinder 15 D from the inlet, uniform inlet velocity,",
+        "zero-gradient outlet, free-slip side walls (blockage D/H = 5%). The cylinder sits 0.025 D",
+        "off the centreline so that the Re = 100 wake starts shedding without an artificial kick.",
+        "Each case runs at D = 20 and D = 40 cells in the same physical domain.",
+        "",
+        "**Inlet velocity.** U = 0.1 (Mach 0.17) for Re = 20 and 40; U = 0.05 (Mach 0.087) for",
+        "Re = 100. A first attempt at Mach 0.17 put the shedding frequency at 1.14× the channel's",
+        "first transverse acoustic mode (c_s / 2H, sound reflects perfectly off free-slip walls):",
+        "the lift locked into that resonance and its amplitude grew past 3. At Mach 0.087 the",
+        "shedding sits at 0.57× the mode and the street is clean. The same effect exists in real",
+        "wind tunnels (acoustic resonance of the test section).",
         "",
         "## Results",
         "",
@@ -306,19 +322,19 @@ def write_report(results, figures):
     ]
     names = {"cd": "Cd (mean)", "lr": "Lr / D", "st": "Strouhal St", "cl_amp": "Cl amplitude"}
     by = {(r["D"], r["Re"]): r for r in results}
-    Ds = sorted({r["D"] for r in results})
     for Re in REYNOLDS:
         for key, (lo, hi) in REFERENCE[Re].items():
             vals = [by[(D, Re)][key] if (D, Re) in by else None for D in (20, 40)]
             fmt = "{:.3f}" if key == "st" else "{:.2f}"
             cells = [fmt.format(v) if v is not None else "–" for v in vals]
-            finest = by[(Ds[-1], Re)][key]
+            finest = by[(max(D for D, R in by if R == Re), Re)][key]
             lines.append(f"| {Re} | {names[key]} | {fmt.format(lo)}–{fmt.format(hi)} | "
                          f"{cells[0]} | {cells[1]} | {verdict(finest, lo, hi)} |")
     lines += [
         "",
-        "Reference ranges span the published values below; they are for an unbounded",
-        "cylinder, so the 5% blockage of our channel is expected to push Cd and St slightly up.",
+        "Reference ranges span the published values below. They are for an unbounded cylinder,",
+        "so the 5% blockage of our channel is expected to push Cd and the lift amplitude up.",
+        "The finer grid moves the steady-wake values towards the references.",
         "",
     ]
     lines += [f"- {s}" for s in SOURCES]
@@ -333,11 +349,11 @@ def write_report(results, figures):
         if f:
             name = os.path.basename(f)
             lines += [f"**{titles[name]}**", "", f"![{titles[name]}]({name})", ""]
-    lines += ["## Run details", "", "| Case | τ | Steps | Cd spread | Periods averaged | Saturation |",
-              "|---|---|---|---|---|---|"]
+    lines += ["## Run details", "", "| Case | U | τ | Steps | Cd spread | Periods averaged | Saturation |",
+              "|---|---|---|---|---|---|---|"]
     for r in results:
         sat = f"{r['saturation']:.3f}" if "saturation" in r else "–"
-        lines.append(f"| D = {r['D']}, Re = {r['Re']} | {r['tau']:.3f} | {r['steps']} | "
+        lines.append(f"| D = {r['D']}, Re = {r['Re']} | {r['U']} | {r['tau']:.3f} | {r['steps']} | "
                      f"{r['cd_spread']:.1e} | {r.get('periods', '–')} | {sat} |")
     lines += ["", "Cd spread: max − min of four block averages over the averaging window (steady cases",
               "should be ≈ 0). Saturation: lift amplitude in the first vs second half of the window",
@@ -352,21 +368,22 @@ def write_report(results, figures):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--quick", action="store_true", help="D = 20 only")
+    ap.add_argument("--d", type=int, nargs="+", default=[20, 40], choices=[20, 40], help="resolutions to run")
+    ap.add_argument("--re", type=int, nargs="+", default=list(REYNOLDS), choices=REYNOLDS, help="cases to run")
     ap.add_argument("--report", action="store_true", help="re-analyse saved runs, no simulation")
     ap.add_argument("--scale", type=float, default=1.0, help=argparse.SUPPRESS)
     args = ap.parse_args()
     global TIME_SCALE
     TIME_SCALE = args.scale
-    Ds = [20] if args.quick else [20, 40]
     os.makedirs(OUT, exist_ok=True)
 
     if not args.report:
-        for D in Ds:
-            for Re in REYNOLDS:
+        for D in args.d:
+            for Re in args.re:
                 run_case(D, Re, snapshots=(D == 20 and Re == 100))
 
-    results = [analyse(D, Re) for D in Ds for Re in REYNOLDS
+    # The report covers every case that has results, run now or earlier
+    results = [analyse(D, Re) for D in (20, 40) for Re in REYNOLDS
                if os.path.exists(os.path.join(RUNS, case_name(D, Re), "result.json"))]
     for r in results:
         print({k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()})

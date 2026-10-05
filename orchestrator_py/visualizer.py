@@ -1,3 +1,4 @@
+"""Flow fields: storage and the per-generation frame (one panel: speed field + body)."""
 import os
 
 import matplotlib
@@ -5,103 +6,80 @@ matplotlib.use("Agg")  # render to files only; no GUI backend needed
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.ticker import MaxNLocator
 
-SERIES = "#2a78d6"   # shape and L/D line
-BODY = "#b4b2a9"     # solid cells on the heatmap
-INK = "#52514e"      # body outline
+BLUE = "#2a78d6"     # series colour (categorical slot 1)
+BODY = "#b4b2a9"     # solid cells
+INK = "#52514e"      # outlines, secondary text
 GRID = "#e5e4df"
+U_IN = 0.1
+SPEED_MAX = 0.15     # fixed colour scale so frames are comparable across generations
 # Sequential single-hue ramp for speed: light = slow (wake), dark = fast
 SPEED_CMAP = LinearSegmentedColormap.from_list(
     "speed", ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]).with_extremes(bad=BODY)
+# Diverging blue <-> red with a neutral midpoint, for signed quantities (vorticity, u_x)
+DIVERGING_CMAP = LinearSegmentedColormap.from_list(
+    "signed", ["#0d366b", "#3987e5", "#f0efec", "#e34948", "#8a1f1f"])
 
 
+# ------------------------------------------------------------------------------ field storage
+def csv_to_npz(ux_csv, uy_csv, npz_path):
+    """Pack the worker's u_x / u_y CSVs (rows top to bottom) into one compressed file."""
+    ux = np.loadtxt(ux_csv, delimiter=",", dtype=np.float32)
+    uy = np.loadtxt(uy_csv, delimiter=",", dtype=np.float32)
+    np.savez_compressed(npz_path, ux=ux, uy=uy)
+    os.remove(ux_csv)
+    os.remove(uy_csv)
+    return npz_path
+
+
+def load_field(npz_path):
+    with np.load(npz_path) as f:
+        return f["ux"], f["uy"]
+
+
+def draw_speed(ax, ux, uy, x0=60, streamlines=False):
+    """Speed field with the body in grey, cropped to x >= x0 (the inlet region is empty)."""
+    speed = np.hypot(ux, uy)
+    solid = speed == 0.0  # the worker writes exactly 0 inside the body
+    ny, nx = speed.shape
+    sl = (slice(None), slice(x0, nx))
+    extent = (x0 - 0.5, nx - 0.5, ny - 0.5, -0.5)
+    im = ax.imshow(np.ma.masked_where(solid[sl], speed[sl]), cmap=SPEED_CMAP, vmin=0, vmax=SPEED_MAX,
+                   origin="upper", extent=extent, interpolation="bilinear")
+    ax.contour(np.arange(x0, nx), np.arange(ny), solid[sl], levels=[0.5], colors=INK, linewidths=0.8)
+    if streamlines:
+        X, Y = np.meshgrid(np.arange(x0, nx), np.arange(ny))
+        u, v = np.where(solid, 0, ux)[sl], np.where(solid, 0, -uy)[sl]   # rows run downward
+        ax.streamplot(X, Y, u, v, color=INK, linewidth=0.5, density=1.6, arrowsize=0.5)
+        ax.set_xlim(x0 - 0.5, nx - 0.5)
+        ax.set_ylim(ny - 0.5, -0.5)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return im
+
+
+# ------------------------------------------------------------------------------ frames
 class Visualizer:
     def __init__(self, frames_dir):
         self.frames_dir = frames_dir
         os.makedirs(self.frames_dir, exist_ok=True)
 
-    def render_generation(self, gen, best_shape, ld_history):
-        """Save the frame for one generation and return its path."""
-        fig, axs = plt.subplots(3, 1, figsize=(10, 12))
-
-        # 1. Shape Boundary Approximation
-        axs[0].set_title(f"Best Shape Outline (Gen {gen}, α={best_shape.alpha:.1f}°, c={best_shape.camber:.1f})")
-        axs[0].set_xlim(0, 100)
-        axs[0].set_ylim(-30, 30)
-
-        # Simple rendering for top/bottom curve using Cosine Interpolation
-        xs = np.linspace(0, best_shape.L, 200)
-        ys = []
-        n_segments = len(best_shape.t_pts) - 1
-        seg_len = best_shape.L / n_segments
-
-        for x in xs:
-            seg = min(int(x / seg_len), n_segments - 1)
-            x0 = seg * seg_len
-            x1 = (seg + 1) * seg_len
-            t0 = best_shape.t_pts[seg]
-            t1 = best_shape.t_pts[seg + 1]
-
-            fraction = (x - x0) / (x1 - x0) if x1 > x0 else 0
-            mu = (1.0 - np.cos(fraction * np.pi)) / 2.0
-            half_T = (t0 * (1.0 - mu) + t1 * mu) / 2.0
-
-            # Simple camber approximation for visualization
-            yc = 4.0 * best_shape.camber * (x / best_shape.L) * (1.0 - x / best_shape.L)
-            ys.append(half_T + yc)
-
-        # Rotation by angle of attack for visualization
-        a_rad = np.radians(-best_shape.alpha)
-        ca, sa = np.cos(a_rad), np.sin(a_rad)
-
-        top_x = [x * ca - ys[i] * sa for i, x in enumerate(xs)]
-        top_y = [x * sa + ys[i] * ca for i, x in enumerate(xs)]
-
-        bottom_y_pts = [yc - (ys[i] - yc) for i, yc in enumerate([4.0 * best_shape.camber * (x / best_shape.L) * (1.0 - x / best_shape.L) for x in xs])]
-        bot_x = [x * ca - bottom_y_pts[i] * sa for i, x in enumerate(xs)]
-        bot_y = [x * sa + bottom_y_pts[i] * ca for i, x in enumerate(xs)]
-
-        axs[0].plot(top_x, top_y, color=SERIES, linewidth=2)
-        axs[0].plot(bot_x, bot_y, color=SERIES, linewidth=2)
-
-        # Correctly fill the polygon by connecting top and reversed bottom
-        poly_x = top_x + bot_x[::-1]
-        poly_y = top_y + bot_y[::-1]
-        axs[0].fill(poly_x, poly_y, color=SERIES, alpha=0.25)
-
-        axs[0].set_aspect('equal', 'box')
-        axs[0].grid(True, color=GRID)
-        axs[0].set_axisbelow(True)
-
-        # 2. Velocity Heatmap
-        axs[1].set_title(f"Velocity Magnitude (Gen {gen}, L/D={best_shape.ld:.2f})")
-        if best_shape.heatmap and os.path.exists(best_shape.heatmap):
-            data = np.loadtxt(best_shape.heatmap, delimiter=',')
-            solid = data == 0.0  # the worker writes exactly 0 inside the body
-            im = axs[1].imshow(np.ma.masked_where(solid, data), cmap=SPEED_CMAP, origin='upper', vmin=0)
-            axs[1].contour(solid, levels=[0.5], colors=INK, linewidths=0.8)
-            plt.colorbar(im, ax=axs[1], label="|u| (lattice units)")
-            axs[1].set_xlabel("X (Grid cells)")
-            axs[1].set_ylabel("Y (Grid cells)")
+    def render_field(self, gen, ld, field_path):
+        """One frame per generation: the best shape's flow field. Returns the image path."""
+        fig, ax = plt.subplots(figsize=(9, 3.6))
+        if field_path and os.path.exists(field_path):
+            im = draw_speed(ax, *load_field(field_path))
+            cb = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
+            cb.set_label("speed / inlet speed", color=INK)
+            cb.set_ticks(np.arange(0, SPEED_MAX + 1e-9, 0.05))
+            cb.set_ticklabels([f"{t / U_IN:.1f}" for t in np.arange(0, SPEED_MAX + 1e-9, 0.05)])
         else:
-            axs[1].text(0.5, 0.5, 'Heatmap data not found', horizontalalignment='center', verticalalignment='center')
-
-        # 3. Evolution Line Chart
-        axs[2].set_title("Best Lift/Drag over Generations")
-        axs[2].plot(range(len(ld_history)), ld_history, color=SERIES, linewidth=2,
-                    marker='o', markersize=4 if len(ld_history) > 30 else 6)
-        axs[2].set_xlabel("Generation")
-        axs[2].set_ylabel("Lift / Drag")
-        axs[2].xaxis.set_major_locator(MaxNLocator(integer=True))
-        axs[2].grid(True, color=GRID)
-        axs[2].set_axisbelow(True)
-
-        plt.tight_layout()
-        # Every run writes into a fresh folder, so a frame is never overwritten (or locked by a viewer)
-        save_path = os.path.join(self.frames_dir, f"generation_{gen:03d}.png")
-        plt.savefig(save_path, dpi=200)
+            ax.text(0.5, 0.5, "flow field not available", ha="center", va="center", transform=ax.transAxes)
+            ax.set_axis_off()
+        ax.set_title(f"Generation {gen}", loc="left", fontsize=13)
+        ax.set_title(f"best L/D = {ld:.2f}", loc="right", fontsize=13, color=BLUE)
+        fig.tight_layout()
+        path = os.path.join(self.frames_dir, f"field_{gen:03d}.png")
+        fig.savefig(path, dpi=120)
         plt.close(fig)
-
-        print(f"Rendered visualization to {save_path}")
-        return save_path
+        return path

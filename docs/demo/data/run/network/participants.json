@@ -1,0 +1,34 @@
+{
+  "cluster": "mock",
+  "program_id": "DeCFD111111111111111111111111111111111111111",
+  "participants": {
+    "2DxS4mQem2t8wvY42PaP76aN1ktdps6uusurx3bm3oLx": {
+      "role": "client",
+      "name": "client"
+    },
+    "EHcKPG5iG3XFDBJnUYXNP12xFBfxLrkoPvZoKBs9eer4": {
+      "role": "verifier",
+      "name": "verifier"
+    },
+    "8arG1Nc9BQf6k4ZpMLpWJaA2ieFHF2kVQrgZDvSeummZ": {
+      "role": "miner",
+      "name": "miner-1",
+      "honest": true
+    },
+    "5sTVTy7Eh1HiBNCPvAmCVN8APi8XVqF6c8enZFX2F6Fn": {
+      "role": "miner",
+      "name": "miner-2",
+      "honest": true
+    },
+    "7zKmgWQ96x3PUfsjJVLwPP5VaV54iYLQk8nU1y8xyHTo": {
+      "role": "miner",
+      "name": "miner-3",
+      "honest": true
+    },
+    "C8k2x4s4pwGuyM5JDHQB45SvokegptteFB5VyU8cc5bh": {
+      "role": "miner",
+      "name": "miner-4",
+      "honest": false
+    }
+  }
+}

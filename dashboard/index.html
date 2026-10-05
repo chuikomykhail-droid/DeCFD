@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeCFD Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">DeCFD</span>
+    <span class="tagline">decentralized evolutionary aerodynamics</span>
+  </div>
+  <div class="controls">
+    <label class="run-picker">Run
+      <select id="run-select" aria-label="Run"></select>
+    </label>
+    <span id="status" class="pill">loading…</span>
+    <span id="cluster" class="pill pill-muted" title="Where the ledger lives">ledger: —</span>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis" aria-label="Headline numbers"></section>
+
+  <section class="card evolution">
+    <div class="card-head">
+      <h2>Evolution</h2>
+      <p class="hint">The best shape of each generation and the flow around it. Click the chart to jump to a generation.</p>
+    </div>
+    <div class="evo-grid">
+      <figure class="field">
+        <img id="frame" alt="Flow field around the best shape of the selected generation">
+        <div class="player">
+          <button id="play" class="btn" aria-label="Play">▶</button>
+          <input id="gen-slider" type="range" min="0" max="0" value="0" aria-label="Generation">
+          <span id="gen-label" class="mono">gen 0</span>
+          <label class="follow"><input id="follow" type="checkbox" checked> follow latest</label>
+        </div>
+        <figcaption id="gen-caption"></figcaption>
+      </figure>
+      <div class="chart-wrap">
+        <div class="chart-title">Lift / drag by generation</div>
+        <div class="legend">
+          <span><i class="swatch swatch-line"></i>best of generation</span>
+          <span><i class="swatch swatch-dot"></i>population</span>
+        </div>
+        <div id="chart" class="chart"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="network-grid">
+    <div class="card">
+      <div class="card-head">
+        <h2>Miners</h2>
+        <p class="hint">Stake is collateral: a miner caught faking a result loses half of it.</p>
+      </div>
+      <div class="table-wrap">
+        <table id="miners">
+          <thead><tr><th>Miner</th><th>Status</th><th class="num">Tasks</th><th class="num">Earned</th><th>Stake</th><th class="num">Caught</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="economy" class="economy"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>Ledger events</h2>
+        <label class="follow"><input id="only-audits" type="checkbox"> audits &amp; fraud only</label>
+      </div>
+      <ol id="events" class="events" aria-live="polite"></ol>
+    </div>
+  </section>
+
+  <section class="card" id="report-section" hidden>
+    <div class="card-head">
+      <h2>Report</h2>
+      <p class="hint">Generated when the run finishes (orchestrator_py/report.py).</p>
+    </div>
+    <div id="report" class="report-grid"></div>
+  </section>
+</main>
+
+<footer>
+  <a href="https://github.com/chuikomykhail-droid/DeCFD">Source on GitHub</a>
+  · 2D lattice Boltzmann, Re ≈ 180 · ledger is a local mock of the Solana program
+</footer>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
