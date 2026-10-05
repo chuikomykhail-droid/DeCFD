@@ -87,7 +87,7 @@ def compute_fitness(s):
 def tournament(population):
     return min(random.sample(population, 2), key=lambda s: s.fitness)
 
-def pick_parents(population, n_pairs, net, audit=True):
+def pick_parents(population, n_pairs, net, audit=False):
     """Tournament-select parent pairs. With audit on, every unverified winner is re-computed
     by the verifier before it may reproduce, so a faked score can't steer the search.
     If an audit catches fraud the fitness landscape changed, so selection is redone."""
@@ -121,8 +121,8 @@ def main():
     parser.add_argument('--cheaters', type=int, default=1, help='How many of the miners are lazy (fake results)')
     parser.add_argument('--cheat-prob', type=float, default=0.5, help='Probability a lazy miner fakes a given task')
     parser.add_argument('--verify-rate', type=float, default=0.2, help='Fraction of tasks randomly audited')
-    parser.add_argument('--no-parent-audit', action='store_true',
-                        help='Let unverified results reproduce (only the leader and the random sample get audited)')
+    parser.add_argument('--parent-audit', action='store_true',
+                        help='Also audit every unverified tournament winner before it reproduces (~2.5x more audits)')
     parser.add_argument('--seed', type=int, default=42, help='GA random seed')
     parser.add_argument('--quiet-net', action='store_true', help='Hide per-task network log lines (fraud events are still shown)')
     args = parser.parse_args()
@@ -225,7 +225,7 @@ def main():
 
             # Tournament selection (size=2)
             pairs = pick_parents(population, POPULATION_SIZE - len(next_population), net,
-                                 audit=not args.no_parent_audit)
+                                 audit=args.parent_audit)
 
         paid = net.finalize_epoch(gen)
 

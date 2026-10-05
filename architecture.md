@@ -97,7 +97,7 @@ at about 150 MLUPS from 6 threads up. One 6000-step evaluation takes ≈ 3 s usi
 
 **Trust rules.** The GA never acts on an unverified result where it matters:
 1. The generation leader is always verified before it becomes the elite.
-2. Parent audit (on by default, `--no-parent-audit` turns it off): every unverified
+2. Parent audit (off by default, `--parent-audit` turns it on): every unverified
    tournament winner is verified before it may reproduce. If an audit catches fraud,
    selection is redone with corrected values.
 
@@ -118,7 +118,7 @@ sequenceDiagram
     P->>M: task (round-robin over active miners)
     M->>M: run worker
     M->>P: submit_result(result_hash)
-    Note over V: random audit (verify_rate) + leader check + parent check
+    Note over V: random audit (verify_rate) + leader check (+ parent check)
     V->>V: re-run worker
     V->>P: resolve_challenge(verifier_hash)
     alt hashes match
@@ -221,7 +221,7 @@ the network layer is independent of the objective.
   failing an honest miner. A real deployment needs integer or fixed-point rasterization or a
   tolerance-based comparison, plus reproducible builds.
 - A miner-side failure such as a timeout hashes as an error and would be slashed. The worker timeout is therefore generous (300 s).
-- A faked result that is never sampled, never the leader and never a parent goes undetected. The end-of-run report counts these cases.
+- A faked result that is never sampled and never the leader (nor a parent, with `--parent-audit`) goes undetected. It can still win tournaments and pass its genes on; the children are evaluated honestly. The end-of-run report counts these cases.
 - The ledger is a local JSONL mock.
 
 ## 8. Roadmap

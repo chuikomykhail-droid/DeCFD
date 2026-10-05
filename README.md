@@ -28,7 +28,7 @@ Requirements: Python 3.9+ and Visual Studio 2019+ (or Build Tools) with the
 ```powershell
 pip install -r orchestrator_py/requirements.txt
 powershell -ExecutionPolicy Bypass -File build.ps1          # -> worker_cpp\worker.exe
-python orchestrator_py/app.py --pop 12 --gen 20 --quiet-net # ≈ 15 min on a 12-thread laptop
+python orchestrator_py/app.py --pop 12 --gen 20 --quiet-net # ≈ 11 min on a 12-thread laptop
 python orchestrator_py/make_gif.py                          # GIF of the latest run
 ```
 
@@ -55,7 +55,7 @@ tested yet.
 | `--cheaters` | 1 | how many of them are lazy |
 | `--cheat-prob` | 0.5 | chance a lazy miner fakes a task |
 | `--verify-rate` | 0.2 | fraction of tasks audited at random |
-| `--no-parent-audit` | off | let unverified results reproduce (only the leader and the random sample get audited) |
+| `--parent-audit` | off | also audit every unverified tournament winner before it reproduces |
 | `--seed` | 42 | GA seed; runs are reproducible |
 | `--quiet-net` | off | hide per-task log lines (fraud events are still shown) |
 
@@ -65,7 +65,7 @@ Each generation is one network epoch:
 
 1. Every new shape becomes a task. The client locks the reward in escrow, and the task pins the hash of the parameters and of `worker.exe`.
 2. Miners compute in parallel and submit a hash of their result.
-3. The verifier re-computes a random 20% of tasks, plus every result the GA is about to rely on: the generation leader and every selected parent.
+3. The verifier re-computes a random 20% of tasks, plus the generation leader before it becomes the elite. With `--parent-audit`, every selected parent is audited as well.
 4. A mismatch slashes 50% of the miner's stake, refunds the client and triggers a re-audit of the miner's other work in this epoch. A miner whose stake drops below the minimum is banned.
 5. The epoch closes and every surviving task is paid.
 
@@ -106,10 +106,10 @@ them lazy, on a 12-thread laptop.
 
 Cost of auditing parents:
 
-| | parent audit (default) | `--no-parent-audit` |
+| | default | `--parent-audit` |
 |---|---|---|
-| Audits / tasks | 161 / 221 (73%) | 59 / 221 (27%) |
-| Run time | 15.6 min | 11.1 min |
+| Audits / tasks | 59 / 221 (27%) | 161 / 221 (73%) |
+| Run time | 11.1 min | 15.6 min |
 | Fraud caught | 2 of 2 | 2 of 2 |
 
 Both runs follow the same trajectory. Here the lazy miner is banned in the first epoch, so
