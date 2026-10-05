@@ -7,7 +7,7 @@ Flow past a circular cylinder is the standard benchmark for a 2D incompressible 
 Every case runs at two resolutions (D = 20 and 40 cells) in the same physical domain
 (50 D x 20 D, free-slip side walls, 5% blockage), so the report also shows grid convergence.
 
-    python validation/cylinder.py                  # full study, ~1 h on a 12-thread laptop
+    python validation/cylinder.py                  # full study, ~1.5 h on a 12-thread laptop
     python validation/cylinder.py --d 20           # D = 20 only, ~12 min
     python validation/cylinder.py --d 40 --re 100  # any subset
     python validation/cylinder.py --report         # re-plot from saved runs without re-running
@@ -334,7 +334,7 @@ def write_report(results, figures):
         "",
         "Reference ranges span the published values below. They are for an unbounded cylinder,",
         "so the 5% blockage of our channel is expected to push Cd and the lift amplitude up.",
-        "The finer grid moves the steady-wake values towards the references.",
+        "Doubling the resolution moves every value towards the references.",
         "",
     ]
     lines += [f"- {s}" for s in SOURCES]

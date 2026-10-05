@@ -71,13 +71,13 @@ circular cylinder, compared with published values ([full report](docs/validation
 | Re = 20: wake length Lr/D | 0.95 | 0.91–0.94 |
 | Re = 40: drag coefficient Cd | 1.60 | 1.48–1.62 |
 | Re = 40: wake length Lr/D | 2.33 | 2.13–2.35 |
-| Re = 100: shedding frequency (Strouhal) | 0.164 | 0.160–0.175 |
-| Re = 100: mean drag Cd | 1.42 | 1.33–1.38 |
-| Re = 100: lift amplitude | 0.38 | 0.25–0.34 |
+| Re = 100: shedding frequency (Strouhal) | 0.165 | 0.160–0.175 |
+| Re = 100: mean drag Cd | 1.37 | 1.33–1.38 |
+| Re = 100: lift amplitude | 0.34 | 0.25–0.34 |
 
-The steady wakes and the shedding frequency match. Drag and lift amplitude at Re = 100 are
-3% and 11% high, as expected from the 5% blockage of the simulated channel (the references
-are for an unbounded cylinder).
+Values are at 40 cells per diameter. Everything falls inside the published range except
+the Re = 20 wake length, 1.4% above it; halving the cell size moves every value towards
+the references.
 
 ![Von Kármán vortex street behind a cylinder at Re = 100](docs/validation/vortex_street.gif)
 
@@ -102,7 +102,7 @@ Open the dashboard while the run is going: it updates every two seconds. The rep
 | `python orchestrator_py/report.py [run]` | Rebuild a run's report |
 | `python orchestrator_py/export_demo.py [run]` | Export the dashboard + a run to `docs/demo/` (GitHub Pages) |
 | `python -m unittest discover -s tests` | Ledger rules, worker determinism, fraud detection (≈ 15 s) |
-| `python validation/cylinder.py` | Cylinder benchmark (≈ 45 min; needs the bigger-grid builds, see the script) |
+| `python validation/cylinder.py` | Cylinder benchmark (≈ 1.5 h; needs the bigger-grid builds, see the script) |
 
 **CMake** (any platform; also used by the VS Code CMake Tools extension):
 

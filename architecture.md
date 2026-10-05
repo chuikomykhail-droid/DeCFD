@@ -269,13 +269,13 @@ with published values for an unbounded cylinder.
 | Re = 20: wake length Lr/D | 0.95 | 0.91–0.94 |
 | Re = 40: drag coefficient Cd | 1.60 | 1.48–1.62 |
 | Re = 40: wake length Lr/D | 2.33 | 2.13–2.35 |
-| Re = 100: shedding frequency (Strouhal) | 0.164 | 0.160–0.175 |
-| Re = 100: mean drag Cd | 1.42 | 1.33–1.38 |
-| Re = 100: lift amplitude | 0.38 | 0.25–0.34 |
+| Re = 100: shedding frequency (Strouhal) | 0.165 | 0.160–0.175 |
+| Re = 100: mean drag Cd | 1.37 | 1.33–1.38 |
+| Re = 100: lift amplitude | 0.34 | 0.25–0.34 |
 
-Values are from the finest grid run for each case (D = 40 cells for Re = 20 and 40, D = 20 for
-Re = 100). Doubling the resolution moves the steady-wake values towards the references; the
-excess at Re = 100 matches the 5% blockage of the channel.
+Values are from the finer grid (D = 40 cells). At D = 20, drag and lift amplitude at Re = 100
+were 3% and 11% above the range; doubling the resolution brings them in. The only value
+still outside is the Re = 20 wake length, 1.4% above the range.
 
 Running Re = 100 at Mach 0.17 first produced a lift amplitude above 3: the shedding frequency
 sat at 1.14× the channel's first transverse acoustic mode (c_s / 2H, free-slip walls reflect

@@ -24,12 +24,13 @@ wind tunnels (acoustic resonance of the test section).
 | 20 | Lr / D | 0.91–0.94 | 0.97 | 0.95 | +1.4% outside |
 | 40 | Cd (mean) | 1.48–1.62 | 1.62 | 1.60 | within range |
 | 40 | Lr / D | 2.13–2.35 | 2.39 | 2.33 | within range |
-| 100 | Strouhal St | 0.160–0.175 | 0.164 | – | within range |
-| 100 | Cd (mean) | 1.33–1.38 | 1.42 | – | +2.9% outside |
-| 100 | Cl amplitude | 0.25–0.34 | 0.38 | – | +10.6% outside |
+| 100 | Strouhal St | 0.160–0.175 | 0.164 | 0.165 | within range |
+| 100 | Cd (mean) | 1.33–1.38 | 1.42 | 1.37 | within range |
+| 100 | Cl amplitude | 0.25–0.34 | 0.38 | 0.34 | within range |
 
-Reference ranges span the published values below; they are for an unbounded
-cylinder, so the 5% blockage of our channel is expected to push Cd and St slightly up.
+Reference ranges span the published values below. They are for an unbounded cylinder,
+so the 5% blockage of our channel is expected to push Cd and the lift amplitude up.
+Doubling the resolution moves every value towards the references.
 
 - Tritton 1959 (experiment): Cd
 - Coutanceau & Bouard 1977 (experiment): Lr
@@ -64,6 +65,7 @@ cylinder, so the 5% blockage of our channel is expected to push Cd and St slight
 | D = 20, Re = 100 | 0.05 | 0.530 | 120000 | 7.9e-03 | 23 | 1.009 |
 | D = 40, Re = 20 | 0.1 | 1.100 | 40000 | 2.3e-04 | – | – |
 | D = 40, Re = 40 | 0.1 | 0.800 | 60000 | 1.9e-04 | – | – |
+| D = 40, Re = 100 | 0.05 | 0.560 | 240000 | 1.5e-02 | 24 | 1.013 |
 
 Cd spread: max − min of four block averages over the averaging window (steady cases
 should be ≈ 0). Saturation: lift amplitude in the first vs second half of the window
