@@ -8,11 +8,14 @@ from worker_runner import run_worker
 
 
 class Miner:
+    remote = False
+
     def __init__(self, name, wallet, honest=True, cheat_prob=0.0):
         self.name = name
         self.wallet = wallet
         self.honest = honest
         self.cheat_prob = cheat_prob
+        self.online = True
         self.faked_tasks = set()  # ground truth, used only for the end-of-run report
 
     @property
@@ -30,3 +33,21 @@ class Miner:
                 cl = r.uniform(0.5, 2.0)
                 return {"status": "ok", "fx": cd * 0.25, "fy": cl * 0.25, "cd": cd, "cl": cl}
         return run_worker(args, threads=threads)
+
+
+class RemoteMiner:
+    """A miner node running elsewhere (orchestrator_py/miner_node.py). It reads its tasks from
+    the chain and publishes results there; this process never holds its key."""
+    remote = True
+    honest = None   # unknown: only audits can tell
+
+    def __init__(self, name, pubkey):
+        self.name = name
+        self.wallet = None
+        self._pubkey = pubkey
+        self.online = True
+        self.faked_tasks = set()
+
+    @property
+    def pubkey(self):
+        return self._pubkey

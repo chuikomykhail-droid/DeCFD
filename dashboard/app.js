@@ -6,7 +6,7 @@
 const POLL_MS = 2000;
 const IX_LABEL = {
   initialize: "Program initialized", register_miner: "Miner registered", create_job: "Job created",
-  create_task: "Task posted", submit_result: "Result submitted", verify_ok: "Audit passed",
+  create_task: "Task posted", submit_result: "Result submitted", verify_ok: "Audit passed", cancel_task: "Task cancelled",
   slash: "FRAUD caught", settle_task: "Reward paid", close_job: "Job closed",
 };
 const REPORT = [
@@ -19,7 +19,7 @@ const REPORT = [
 ];
 
 const state = {
-  runs: [], run: null, history: null, events: [], participants: {}, cluster: "—",
+  runs: [], run: null, history: null, events: [], participants: {}, cluster: "—", program: null,
   selected: 0, follow: true, onlyAudits: false, timer: null, player: null,
 };
 
@@ -29,6 +29,8 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 const short = (pk) => (pk ? `${pk.slice(0, 4)}…${pk.slice(-4)}` : "—");
 const posix = (p) => (p || "").replace(/\\/g, "/");
 const base = () => `data/${encodeURIComponent(state.run)}/`;
+const onChain = () => state.cluster && state.cluster !== "mock" && state.cluster !== "—";
+const explorer = (kind, id) => `https://explorer.solana.com/${kind}/${id}?cluster=${state.cluster}`;
 
 async function getJSON(url) {
   const r = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
@@ -109,7 +111,9 @@ function renderStatus() {
     el.textContent = `running · ${n} of ${planned} generations done`;
     el.className = "pill pill-live";
   }
-  $("cluster").textContent = `ledger: ${state.cluster}`;
+  $("cluster").innerHTML = onChain() && state.program
+    ? `<a href="${explorer("address", state.program)}" target="_blank" rel="noopener">ledger: Solana ${esc(state.cluster)} ↗</a>`
+    : `ledger: ${esc(state.cluster)}`;
 }
 
 function kpi(label, value, sub, alert) {
@@ -199,7 +203,8 @@ function renderMiners() {
     const low = mn.banned || (t.minStake != null && mn.stake < t.minStake);
     return `<tr>
       <td><div class="miner-name">${esc(mn.name)}</div><div class="pubkey">${short(mn.pubkey)}</div>
-        ${p.honest === false ? '<div class="tag">simulated cheater</div>' : ""}</td>
+        ${p.honest === false ? '<div class="tag">simulated cheater</div>' : ""}
+        ${p.remote ? '<div class="tag">remote node</div>' : ""}</td>
       <td><span class="status ${mn.banned ? "status-banned" : "status-active"}">${mn.banned ? "banned" : "active"}</span></td>
       <td class="num">${mn.tasks}</td>
       <td class="num">${mn.earned}</td>
@@ -232,6 +237,7 @@ function describe(e) {
     case "slash": return `${task} by ${esc(nameOf(e.miner))}: hash mismatch, slashed ${e.penalty} (${e.to_verifier} to the verifier)${e.banned ? " — miner banned" : ""}`;
     case "settle_task": return `${esc(nameOf(e.miner))} +${e.paid} for ${task}`;
     case "close_job": return `${e.refund} returned to the client`;
+    case "cancel_task": return `${task} withdrawn: its miner did not answer`;
     default: return "";
   }
 }
@@ -240,8 +246,9 @@ function renderEvents() {
   const list = state.onlyAudits ? state.events.filter((e) => e.ix === "verify_ok" || e.ix === "slash") : state.events;
   const rows = list.slice(-300).reverse().map((e) => {
     const cls = e.ix === "slash" ? "fraud" : e.ix === "verify_ok" ? "audit" : "";
+    const tx = onChain() && e.sig ? ` <a class="tx" href="${explorer("tx", e.sig)}" target="_blank" rel="noopener">tx ↗</a>` : "";
     return `<li class="${cls}"><span class="slot">#${e.slot}</span><span><span class="ix">${esc(IX_LABEL[e.ix] || e.ix)}</span> ` +
-      `<span class="detail">${describe(e)}</span></span></li>`;
+      `<span class="detail">${describe(e)}</span>${tx}</span></li>`;
   });
   $("events").innerHTML = rows.join("") || "<li><span></span><span class='detail'>No events yet.</span></li>";
 }
@@ -271,6 +278,7 @@ async function refresh() {
         const p = await getJSON(base() + "network/participants.json");
         state.participants = p.participants;
         state.cluster = p.cluster;
+        state.program = p.program_id;
       } catch { /* written at the start of a run */ }
     }
     render();

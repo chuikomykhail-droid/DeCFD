@@ -8,7 +8,7 @@ import os
 import threading
 
 from .ledger import Ledger, LedgerError
-from .wallet import short
+from .wallet import MockWallet, short
 
 
 class MockSolanaProgram(Ledger):
@@ -55,6 +55,9 @@ class MockSolanaProgram(Ledger):
             raise LedgerError("Program not initialized")
 
     # ------------------------------------------------------------------ instructions
+    def wallet(self, label, rng=None):
+        return MockWallet(rng, label)
+
     def airdrop(self, pubkey, amount):
         with self._lock:
             self._credit(pubkey, amount)
@@ -83,18 +86,19 @@ class MockSolanaProgram(Ledger):
             }
             return self._tx("register_miner", miner, name=name, stake=stake)
 
-    def create_job(self, client, job_id, budget, reward, binary_hash):
+    def create_job(self, client, job_id, budget, reward, binary_hash, steps=0, avg=0):
         with self._lock:
             self._require_config()
             if job_id in self.jobs:
                 raise LedgerError(f"Job {job_id} exists")
             self._debit(client.pubkey, budget)
             self.jobs[job_id] = {"client": client.pubkey, "budget": budget, "escrow": budget, "reserved": 0,
-                                 "reward": reward, "binary_hash": binary_hash, "tasks": 0, "status": "open"}
+                                 "reward": reward, "binary_hash": binary_hash, "steps": steps, "avg": avg,
+                                 "tasks": 0, "status": "open"}
             return self._tx("create_job", client, job=job_id, budget=budget, reward=reward,
                             binary_hash=binary_hash)
 
-    def create_task(self, client, job_id, task_id, params_hash, epoch):
+    def create_task(self, client, job_id, task_id, params_hash, epoch, params=None, assigned=None):
         with self._lock:
             job = self.jobs.get(job_id)
             if job is None or job["status"] != "open":
@@ -107,12 +111,13 @@ class MockSolanaProgram(Ledger):
                 raise LedgerError(f"Job {job_id} budget exhausted")
             job["reserved"] += job["reward"]
             job["tasks"] += 1
-            self.tasks[task_id] = {"job": job_id, "epoch": epoch, "params_hash": params_hash,
-                                   "reward": job["reward"], "status": "open", "miner": None, "result_hash": None}
+            self.tasks[task_id] = {"job": job_id, "epoch": epoch, "params": params, "params_hash": params_hash,
+                                   "reward": job["reward"], "status": "open", "assigned": assigned,
+                                   "miner": None, "result": None, "result_hash": None}
             return self._tx("create_task", client, job=job_id, task=task_id, epoch=epoch,
-                            params_hash=params_hash, reward=job["reward"])
+                            params_hash=params_hash, reward=job["reward"], assigned=assigned)
 
-    def submit_result(self, miner, task_id, result_hash):
+    def submit_result(self, miner, task_id, result_hash, result=None):
         with self._lock:
             t = self._task(task_id)
             if t["status"] != "open":
@@ -120,7 +125,9 @@ class MockSolanaProgram(Ledger):
             m = self.miners.get(miner.pubkey)
             if m is None or m["status"] != "active":
                 raise LedgerError(f"Miner {short(miner.pubkey)} is not active")
-            t.update(status="submitted", miner=miner.pubkey, result_hash=result_hash)
+            if t["assigned"] not in (None, miner.pubkey):
+                raise LedgerError(f"Task {task_id} is assigned to another miner")
+            t.update(status="submitted", miner=miner.pubkey, result_hash=result_hash, result=result)
             m["tasks"] += 1
             return self._tx("submit_result", miner, task=task_id, result_hash=result_hash)
 
@@ -157,7 +164,7 @@ class MockSolanaProgram(Ledger):
     def settle_task(self, signer, task_id):
         with self._lock:
             t = self._task(task_id)
-            if t["status"] == "rejected":
+            if t["status"] in ("rejected", "cancelled"):
                 return 0
             if t["status"] not in ("submitted", "verified"):
                 raise LedgerError(f"Task {task_id} is {t['status']}, cannot settle")
@@ -169,6 +176,17 @@ class MockSolanaProgram(Ledger):
             t["status"] = "finalized"
             self._tx("settle_task", signer, task=task_id, miner=t["miner"], paid=t["reward"])
             return t["reward"]
+
+    def cancel_task(self, client, task_id):
+        with self._lock:
+            t = self._task(task_id)
+            if t["status"] != "open":
+                raise LedgerError(f"Task {task_id} is not open")
+            if self.jobs[t["job"]]["client"] != client.pubkey:
+                raise LedgerError("Only the job's client can cancel its tasks")
+            self.jobs[t["job"]]["reserved"] -= t["reward"]
+            t["status"] = "cancelled"
+            return self._tx("cancel_task", client, task=task_id)
 
     def close_job(self, client, job_id):
         with self._lock:

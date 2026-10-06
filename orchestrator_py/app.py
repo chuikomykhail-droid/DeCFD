@@ -127,7 +127,14 @@ def main():
                         help='Also audit every unverified tournament winner before it reproduces (~2.5x more audits)')
     parser.add_argument('--steps', type=int, default=6000, help='LBM steps per evaluation (job-wide solver setting)')
     parser.add_argument('--avg', type=int, default=2000, help='Steps averaged for the forces (job-wide solver setting)')
-    parser.add_argument('--ledger', choices=['mock'], default='mock', help='Chain backend (a Solana devnet backend plugs in here)')
+    parser.add_argument('--ledger', choices=['mock', 'devnet'], default='mock',
+                        help='Chain backend: in-memory mock, or the DeCFD program on Solana devnet')
+    parser.add_argument('--remote-miners', nargs='*', default=[], metavar='PUBKEY',
+                        help='devnet: addresses of miner nodes (miner_node.py) that compute alongside the local miners')
+    parser.add_argument('--remote-timeout', type=int, default=600, help='devnet: seconds to wait for a remote miner')
+    parser.add_argument('--challenge-window', type=int, default=10,
+                        help='devnet: seconds after a submission before an unaudited task can be paid')
+    parser.add_argument('--network-id', type=int, default=None, help='devnet: network instance id (default: new per run)')
     parser.add_argument('--seed', type=int, default=42, help='GA random seed')
     parser.add_argument('--quiet-net', action='store_true', help='Hide per-task network log lines (fraud events are still shown)')
     args = parser.parse_args()
@@ -150,13 +157,20 @@ def main():
     t_start = time.time()
     print(f"Run folder: {run_dir}")
 
+    if args.remote_miners and args.ledger != "devnet":
+        parser.error("--remote-miners needs --ledger devnet")
+    ledger_options = ({"challenge_window": args.challenge_window, "network_id": args.network_id}
+                      if args.ledger == "devnet" else {})
     net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
                          verify_rate=args.verify_rate, sim_args=["--steps", str(args.steps), "--avg", str(args.avg)],
-                         ledger=args.ledger, log_dir=os.path.join(run_dir, "network"), verbose=not args.quiet_net)
+                         ledger=args.ledger, ledger_options=ledger_options, remote_miners=args.remote_miners,
+                         remote_timeout=args.remote_timeout, log_dir=os.path.join(run_dir, "network"),
+                         verbose=not args.quiet_net)
     # Budget for the worst case: every shape of every generation is a new task
     net.open_job(budget=POPULATION_SIZE * GENERATIONS * net.reward)
     history["config"].update(binary_hash=net.binary_hash, cluster=net.ledger.cluster,
-                             program_id=net.ledger.program_id, job_id=net.job_id)
+                             program_id=net.ledger.program_id, job_id=net.job_id,
+                             network=getattr(net.ledger, "meta", {}).get("config"))
     population = [create_random_shape() for _ in range(POPULATION_SIZE)]
     vis = Visualizer(os.path.join(run_dir, "frames"))
 
