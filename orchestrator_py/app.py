@@ -131,6 +131,8 @@ def main():
                         help='Chain backend: in-memory mock, or the DeCFD program on Solana devnet')
     parser.add_argument('--remote-miners', nargs='*', default=[], metavar='PUBKEY',
                         help='devnet: addresses of miner nodes (miner_node.py) that compute alongside the local miners')
+    parser.add_argument('--remote', type=int, default=0, metavar='N',
+                        help='devnet: wait for N miner nodes to join this run on their own (miner_node.py)')
     parser.add_argument('--remote-timeout', type=int, default=600, help='devnet: seconds to wait for a remote miner')
     parser.add_argument('--challenge-window', type=int, default=10,
                         help='devnet: seconds after a submission before an unaudited task can be paid')
@@ -157,13 +159,14 @@ def main():
     t_start = time.time()
     print(f"Run folder: {run_dir}")
 
-    if args.remote_miners and args.ledger != "devnet":
-        parser.error("--remote-miners needs --ledger devnet")
+    if (args.remote_miners or args.remote) and args.ledger != "devnet":
+        parser.error("--remote and --remote-miners need --ledger devnet")
     ledger_options = ({"challenge_window": args.challenge_window, "network_id": args.network_id}
                       if args.ledger == "devnet" else {})
     net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
                          verify_rate=args.verify_rate, sim_args=["--steps", str(args.steps), "--avg", str(args.avg)],
                          ledger=args.ledger, ledger_options=ledger_options, remote_miners=args.remote_miners,
+                         remote_count=args.remote,
                          remote_timeout=args.remote_timeout, log_dir=os.path.join(run_dir, "network"),
                          verbose=not args.quiet_net)
     # Budget for the worst case: every shape of every generation is a new task

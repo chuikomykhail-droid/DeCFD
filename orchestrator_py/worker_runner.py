@@ -7,13 +7,19 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+
+# A packaged miner (PyInstaller) keeps worker.exe and its scratch folder next to miner.exe
+FROZEN = getattr(sys, "frozen", False)
+APP_DIR = os.path.dirname(sys.executable) if FROZEN else None
 
 WORKER_PATH = os.environ.get(
     "WORKER_PATH",
+    os.path.join(APP_DIR, "worker.exe") if FROZEN else
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "worker_cpp",
                                  "worker.exe" if os.name == "nt" else "worker")),
 )
-RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
+RUNS_DIR = os.path.join(APP_DIR, "runs") if FROZEN else os.path.join(os.path.dirname(__file__), "runs")
 
 # Fields that define the "result" of a task. Only these go into the result hash,
 # so diagnostic fields (spreads, timings) can change without breaking verification.

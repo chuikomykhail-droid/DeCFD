@@ -25,16 +25,21 @@ from solders.system_program import ID as SYSTEM_PROGRAM
 from solders.system_program import TransferParams, transfer
 from solders.transaction import Transaction
 
+from worker_runner import APP_DIR, FROZEN
+
 from .ledger import Ledger, LedgerError
 from .solana_rpc import DEVNET, RpcClient, RpcError
 from .wallet import short
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-KEYS_DIR = os.path.join(ROOT, ".keys")
-DEPLOYMENT = os.path.join(ROOT, "solana", "deployment.json")
+# In the repo: .keys/ and solana/deployment.json; in a packaged miner: keys/ and deployment.json next to it
+KEYS_DIR = os.path.join(APP_DIR, "keys") if FROZEN else os.path.join(ROOT, ".keys")
+DEPLOYMENT = os.path.join(APP_DIR, "deployment.json") if FROZEN else os.path.join(ROOT, "solana", "deployment.json")
 
 TASK_STATUS = {0: "open", 1: "submitted", 2: "verified", 3: "rejected", 4: "finalized", 5: "cancelled"}
 TASK_SIZE = 290            # 8 + Task::INIT_SPACE, fixed layout
+CONFIG_SIZE = 109
+MINER_SIZE = 126           # the name is padded to its max length in the allocation
 TASK_ASSIGNED_OFFSET = 40
 TASK_STATUS_OFFSET = 72
 FUND_BUFFER = 6_000_000    # lamports for account rent + fees on top of a stake (0.006 SOL)
@@ -305,6 +310,12 @@ class SolanaLedger(Ledger):
                                     "name": m["name"], "stake": self.tok(m["stake"]), "remote": True}) + "\n")
         self._log.flush()
         return self.miners[pubkey]
+
+    def find_miners(self):
+        """Every miner registered on this network: [(authority, decoded account)]."""
+        found = self.rpc.program_accounts(self.program, [{"dataSize": MINER_SIZE},
+                                                         {"memcmp": {"offset": 8, "bytes": str(self.config_key)}}])
+        return [(m["authority"], m) for m in (decode_miner(d) for _, d in found)]
 
     def create_job(self, client, job_id, budget, reward, binary_hash, steps=0, avg=0):
         with self._lock:

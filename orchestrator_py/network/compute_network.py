@@ -59,7 +59,7 @@ class ComputeNetwork:
     def __init__(self, n_miners=4, n_cheaters=1, verify_rate=0.2, cheat_prob=0.5, seed=7,
                  reward=10, stake=100, min_stake=50, slash_frac=0.5, verifier_share=0.5,
                  client_funds=100_000, sim_args=(), ledger="mock", ledger_options=None,
-                 remote_miners=(), remote_timeout=600, log_dir=None, verbose=True):
+                 remote_miners=(), remote_count=0, remote_timeout=600, log_dir=None, verbose=True):
         if n_cheaters >= n_miners:
             raise ValueError("Need at least one honest miner")
         self.rng = random.Random(seed)  # separate RNG: network randomness must not perturb the GA
@@ -93,6 +93,8 @@ class ComputeNetwork:
             self.ledger.register_miner(m.wallet, m.name, stake)
         for pk in remote_miners:
             self.miners.append(self._wait_for_remote(pk))
+        if remote_count:
+            self.miners += self._wait_for_remote_count(remote_count)
 
         # Who is who, for the dashboard (the chain only knows public keys)
         participants = {self.client.pubkey: {"role": "client", "name": "client"},
@@ -118,6 +120,28 @@ class ComputeNetwork:
     def active_miners(self):
         return [m for m in self.miners
                 if m.online and self.ledger.miner_account(m.pubkey)["status"] == "active"]
+
+    def _wait_for_remote_count(self, n):
+        """Wait until `n` miner nodes have joined this network on their own (miner_node.py follows
+        the coordinator's newest network), then use whoever joined."""
+        config = getattr(self.ledger, "meta", {}).get("config")
+        print(f"Network {config}: waiting for {n} remote miner(s) to join")
+        local = {m.pubkey for m in self.miners}
+        joined = {}
+        t0 = time.time()
+        while len(joined) < n and time.time() - t0 < self.remote_timeout:
+            for pk, acc in self.ledger.find_miners():
+                if pk not in local and pk not in joined:
+                    self.ledger.track_miner(pk)
+                    joined[pk] = acc["name"]
+                    print(f"  {acc['name']} ({short(pk)}) joined [{len(joined)}/{n}]")
+            if len(joined) < n:
+                time.sleep(3)
+        if not joined:
+            raise RuntimeError(f"No remote miner joined within {self.remote_timeout} s")
+        if len(joined) < n:
+            print(f"Only {len(joined)} of {n} remote miners joined; starting with them")
+        return [RemoteMiner(name, pk) for pk, name in joined.items()]
 
     def _wait_for_remote(self, pubkey):
         """A remote node registers itself on this network; wait until its miner account exists."""
