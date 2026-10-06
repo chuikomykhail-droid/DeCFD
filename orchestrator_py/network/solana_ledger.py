@@ -219,12 +219,12 @@ class SolanaLedger(Ledger):
                 raise LedgerError(str(e)) from e
             self._pending = []
 
-    def _ix(self, kind, name, accounts, data, signers, payer, event, **fields):
+    def _ix(self, kind, ix_name, accounts, data, signers, payer, event, **fields):
         """Send one program instruction; wait for earlier ones first if this step depends on them."""
         if kind != self._last_kind:
             self._sync()
         self._last_kind = kind
-        ix = Instruction(self.program, ix_discriminator(name) + data, accounts)
+        ix = Instruction(self.program, ix_discriminator(ix_name) + data, accounts)
         sig = self._send([ix], signers, payer)
         self.slot += 1
         self._log.write(json.dumps({"sig": sig, "slot": self.slot, "ix": event, "signer": payer.pubkey, **fields}) + "\n")
