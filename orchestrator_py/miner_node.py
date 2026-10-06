@@ -182,7 +182,7 @@ def main():
     if not args.config and not coordinator:
         sys.exit("No coordinator known: pass --config <network address>")
 
-    current, account, jobs = None, None, {}
+    current, account, jobs, done = None, None, {}, set()
     last_lookup = 0.0
     print("Waiting for a network..." if not args.config else "")
     while True:
@@ -200,7 +200,7 @@ def main():
                 continue
             if target != current:
                 account = join(rpc, program, me, target, args)
-                current, jobs = target, {}
+                current, jobs, done = target, {}, set()
                 print("Polling for tasks...")
 
             found = rpc.program_accounts(program, [
@@ -208,6 +208,8 @@ def main():
                 {"memcmp": {"offset": TASK_ASSIGNED_OFFSET, "bytes": me.pubkey}},
                 {"memcmp": {"offset": TASK_STATUS_OFFSET, "bytes": "1"}}])   # base58 of b"\x00" = open
             for addr, data in sorted(found, key=lambda a: a[1][73:77]):
+                if addr in done:
+                    continue      # submitted already; the RPC node may still be a slot behind
                 t = decode_task(data)
                 if t["job"] not in jobs:
                     jobs[t["job"]] = decode_job(rpc.account(t["job"])[0])
@@ -217,6 +219,7 @@ def main():
                 tid = task_label(t["epoch"], t["index"])
                 try:
                     print(f"  {tid}: {compute_and_submit(rpc, program, me, current, account, addr, t, job, binary, args)}")
+                    done.add(addr)
                 except RpcError as e:
                     print(f"  {tid}: submit failed: {e}")
         except RpcError as e:

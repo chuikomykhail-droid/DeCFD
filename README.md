@@ -93,8 +93,9 @@ python orchestrator_py/serve.py                             # dashboard at http:
 python orchestrator_py/app.py --pop 12 --gen 20 --quiet-net # ≈ 12 min on a 12-thread laptop
 ```
 
-Open the dashboard while the run is going: it updates every two seconds. The report
-(`report/` in the run folder) is built automatically at the end.
+Open the dashboard while the run is going: it updates every two seconds, and the
+*Network activity* timeline shows which miner is computing which task right now. The
+report (`report/` in the run folder) is built automatically at the end.
 
 | Command | What it does |
 |---|---|

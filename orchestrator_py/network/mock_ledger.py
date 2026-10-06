@@ -6,6 +6,7 @@ Balances are integers and every instruction conserves the total supply:
 import json
 import os
 import threading
+import time
 
 from .ledger import Ledger, LedgerError
 from .wallet import MockWallet, short
@@ -33,7 +34,8 @@ class MockSolanaProgram(Ledger):
         self.slot += 1
         record = {"slot": self.slot, "ix": ix, "signer": signer.pubkey, **data}
         sig = signer.sign(json.dumps(record, sort_keys=True).encode())
-        self._log.write(json.dumps({"sig": sig, **record}) + "\n")
+        # Wall-clock time is not part of the signed record: it only feeds the dashboard's timeline
+        self._log.write(json.dumps({"sig": sig, **record, "t": round(time.time(), 3)}) + "\n")
         self._log.flush()
         return sig
 

@@ -220,8 +220,8 @@ class ComputeNetwork:
         waiting = {s.task_id: s for s in shapes}
         t0 = time.time()
         while waiting and time.time() - t0 < self.remote_timeout:
-            for tid, s in list(waiting.items()):
-                chain = self.ledger.fetch_task(tid)
+            for tid, chain in self.ledger.fetch_tasks(list(waiting)).items():   # one RPC call for all
+                s = waiting[tid]
                 if chain and chain["status"] != "open":
                     vals = chain["result"]
                     res = ({"status": "ok", "fx": vals[0], "fy": vals[1], "cd": vals[2], "cl": vals[3]}
@@ -230,7 +230,7 @@ class ComputeNetwork:
                     self._accept(s, res)
                     del waiting[tid]
             if waiting:
-                time.sleep(2)
+                time.sleep(1)
         if waiting:
             late = list(waiting.values())
             for s in late:

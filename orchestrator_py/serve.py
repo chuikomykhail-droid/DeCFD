@@ -12,6 +12,7 @@ import http.server
 import json
 import os
 import posixpath
+import sys
 from urllib.parse import unquote, urlparse
 
 from runs import RUN_NAME
@@ -26,15 +27,17 @@ def list_runs():
     if os.path.isdir(RUNS_DIR):
         for name in sorted(os.listdir(RUNS_DIR), reverse=True):
             path = os.path.join(RUNS_DIR, name, "history.json")
-            # Runs from before the ledger refactor have a different event format: skip them
-            participants = os.path.join(RUNS_DIR, name, "network", "participants.json")
-            if not RUN_NAME.match(name) or not os.path.exists(path) or not os.path.exists(participants):
+            if not RUN_NAME.match(name) or not os.path.exists(path):
                 continue
             try:
                 with open(path, encoding="utf-8") as f:
                     h = json.load(f)
             except (OSError, ValueError):
                 continue  # being written right now
+            # Runs from before the ledger refactor have a different event format: skip them. A new
+            # run has "started" from its first second; participants.json comes once miners joined
+            if "started" not in h and not os.path.exists(os.path.join(RUNS_DIR, name, "network", "participants.json")):
+                continue
             gens = h.get("generations", [])
             runs.append({"name": name, "finished": h.get("finished", False), "generations": len(gens),
                          "best_ld": gens[-1]["best"]["ld"] if gens else None})
@@ -73,11 +76,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+class Server(http.server.ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port that is already in use, and the
+    # browser then talks to whichever one answers; refuse instead
+    allow_reuse_address = os.name != "nt"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Serve the DeCFD dashboard")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    try:
+        server = Server(("127.0.0.1", args.port), Handler)
+    except OSError:
+        sys.exit(f"Port {args.port} is busy: the dashboard is probably already running at "
+                 f"http://localhost:{args.port} (close the other serve.py, or pass --port)")
     print(f"Dashboard: http://localhost:{args.port}  (runs from {RUNS_DIR})")
     try:
         server.serve_forever()

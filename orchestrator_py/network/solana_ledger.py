@@ -231,10 +231,30 @@ class SolanaLedger(Ledger):
         self._last_kind = kind
         ix = Instruction(self.program, ix_discriminator(ix_name) + data, accounts)
         sig = self._send([ix], signers, payer)
-        self.slot += 1
-        self._log.write(json.dumps({"sig": sig, "slot": self.slot, "ix": event, "signer": payer.pubkey, **fields}) + "\n")
-        self._log.flush()
+        self._event(sig, event, payer.pubkey, **fields)
         return sig
+
+    def _event(self, sig, event, signer, t=None, **fields):
+        """Append to the event log; `t` (wall clock) feeds the dashboard's timeline."""
+        with self._lock:
+            self.slot += 1
+            self._log.write(json.dumps({"sig": sig, "slot": self.slot, "ix": event, "signer": signer, **fields,
+                                        "t": round(t or time.time(), 3)}) + "\n")
+            self._log.flush()
+
+    def _find_sig(self, address, exclude=(), tries=3):
+        """The newest transaction that touched `address`, except the known ones: the signature of
+        an instruction a remote node signed and sent itself. None if the RPC has not indexed it yet."""
+        for attempt in range(tries):
+            try:
+                rows = self.rpc.call("getSignaturesForAddress", [str(address), {"limit": 5, "commitment": "confirmed"}])
+            except RpcError:
+                return None
+            for r in rows:
+                if r["signature"] not in exclude and not r.get("err"):
+                    return r["signature"]
+            time.sleep(0.5)
+        return None
 
     @staticmethod
     def _m(pubkey, signer=False, writable=False):
@@ -300,15 +320,14 @@ class SolanaLedger(Ledger):
 
     def track_miner(self, pubkey):
         """Load a miner that registered itself (a remote node) into the mirror. Returns it or None."""
-        got = self.rpc.account(miner_pda(self.program, self.config_key, pubkey))
+        key = miner_pda(self.program, self.config_key, pubkey)
+        got = self.rpc.account(key)
         if got is None:
             return None
         m = decode_miner(got[0])
         self.miners[pubkey] = {k: m[k] for k in ("name", "stake", "earned", "slashed", "tasks", "caught", "status")}
-        self.slot += 1
-        self._log.write(json.dumps({"sig": None, "slot": self.slot, "ix": "register_miner", "signer": pubkey,
-                                    "name": m["name"], "stake": self.tok(m["stake"]), "remote": True}) + "\n")
-        self._log.flush()
+        self._event(self._find_sig(key), "register_miner", pubkey, name=m["name"], stake=self.tok(m["stake"]),
+                    remote=True)
         return self.miners[pubkey]
 
     def find_miners(self):
@@ -351,7 +370,7 @@ class SolanaLedger(Ledger):
             job["tasks"] += 1
             self.tasks[task_id] = {"job": job_id, "epoch": epoch, "params_hash": params_hash, "reward": job["reward"],
                                    "status": "open", "miner": None, "result_hash": None, "assigned": assigned,
-                                   "address": str(key), "submitted_at": None}
+                                   "address": str(key), "submitted_at": None, "create_sig": sig}
             return sig
 
     def submit_result(self, miner, task_id, result_hash, result=None):
@@ -371,24 +390,29 @@ class SolanaLedger(Ledger):
             m["tasks"] += 1
             return sig
 
+    def fetch_tasks(self, task_ids):
+        """Read tasks from the chain in one call (remote miners submit there) and refresh the
+        mirror. Returns {task_id: decoded task, or None if the account does not exist}."""
+        ts = [self._task(tid) for tid in task_ids]
+        out = {}
+        got_all = self.rpc.accounts([t["address"] for t in ts])
+        seen = time.time()
+        for tid, t, got in zip(task_ids, ts, got_all):
+            chain = out[tid] = decode_task(got[0]) if got else None
+            if chain and chain["status"] == "submitted" and t["status"] == "open":
+                with self._lock:
+                    m = self.miners.get(chain["miner"])
+                    if m:
+                        m["tasks"] += 1
+                    t.update(status="submitted", miner=chain["miner"], result_hash=chain["result_hash"],
+                             submitted_at=seen)
+                # The node signed this transaction itself: find its signature for the explorer link
+                self._event(self._find_sig(t["address"], exclude={t["create_sig"]}), "submit_result", chain["miner"],
+                            t=seen, task=tid, result_hash=chain["result_hash"], remote=True)
+        return out
+
     def fetch_task(self, task_id):
-        """Read a task from the chain (a remote miner may have submitted it) and refresh the mirror."""
-        t = self._task(task_id)
-        got = self.rpc.account(t["address"])
-        if got is None:
-            return None
-        chain = decode_task(got[0])
-        if chain["status"] == "submitted" and t["status"] == "open":
-            m = self.miners.get(chain["miner"])
-            if m:
-                m["tasks"] += 1
-            t.update(status="submitted", miner=chain["miner"], result_hash=chain["result_hash"],
-                     submitted_at=time.time())
-            self.slot += 1
-            self._log.write(json.dumps({"sig": None, "slot": self.slot, "ix": "submit_result", "signer": chain["miner"],
-                                        "task": task_id, "result_hash": chain["result_hash"], "remote": True}) + "\n")
-            self._log.flush()
-        return chain
+        return self.fetch_tasks([task_id])[task_id]
 
     def resolve_challenge(self, verifier, task_id, verifier_hash):
         with self._lock:

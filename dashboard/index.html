@@ -51,6 +51,27 @@
     </div>
   </section>
 
+  <section class="card" id="timeline-section" hidden>
+    <div class="card-head">
+      <h2>Network activity</h2>
+      <div class="seg" role="group" aria-label="Time range">
+        <button id="tl-recent" class="btn" type="button">Last 3 generations</button>
+        <button id="tl-all" class="btn" type="button">Whole run</button>
+      </div>
+    </div>
+    <p class="hint">One bar per task, from the moment it is posted on chain to the moment its result comes back.
+      Remote nodes are separate computers: they find their tasks on chain and sign their results themselves.</p>
+    <div class="tl-legend">
+      <span><i class="sw sw-local"></i>local miner</span>
+      <span><i class="sw sw-remote"></i>remote node</span>
+      <span><i class="sw sw-open"></i>still computing</span>
+      <span><i class="sw sw-ok"></i>audit passed</span>
+      <span><i class="sw sw-fraud"></i>fake caught</span>
+      <span><i class="sw sw-cancel"></i>timed out, reassigned</span>
+    </div>
+    <div id="timeline" class="timeline"></div>
+  </section>
+
   <section class="network-grid">
     <div class="card">
       <div class="card-head">
@@ -85,7 +106,7 @@
 
 <footer>
   <a href="https://github.com/chuikomykhail-droid/DeCFD">Source on GitHub</a>
-  · 2D lattice Boltzmann, Re ≈ 180 · ledger is a local mock of the Solana program
+  · 2D lattice Boltzmann, Re ≈ 180 · <span id="footer-ledger">ledger: local mock of the Solana program</span>
 </footer>
 
 <div id="tooltip" class="tooltip" hidden></div>

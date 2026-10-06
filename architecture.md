@@ -202,23 +202,28 @@ audit rate or slash; both are one parameter each.
 ### Event log (the contract with the dashboard)
 
 Every instruction appends one JSON line to `network/ledger_tx.jsonl`:
-`{"sig", "slot", "ix", "signer", ...}` with these fields per `ix`:
+`{"sig", "slot", "ix", "signer", ..., "t"}` with these fields per `ix`:
 
 | ix | Fields |
 |---|---|
 | `initialize` | verifier, min_stake, slash_bps, verifier_share_bps |
 | `register_miner` | name, stake |
 | `create_job` | job, budget, reward, binary_hash |
-| `create_task` | job, task, epoch, params_hash, reward |
+| `create_task` | job, task, epoch, params_hash, reward, assigned |
 | `submit_result` | task, result_hash |
 | `verify_ok` | task |
 | `slash` | task, miner, penalty, to_verifier, expected, got, banned |
 | `settle_task` | task, miner, paid |
+| `cancel_task` | task |
 | `close_job` | job, refund |
 
-`network/participants.json` maps public keys to roles and names. A devnet backend writes
-the same records with real transaction signatures, so the dashboard keeps working and can
-link each event to the Solana explorer.
+`t` is the coordinator's wall-clock time (Unix seconds) and drives the dashboard's
+timeline; it is not part of what is signed. `network/participants.json` maps public keys to
+roles and names. The devnet backend writes the same records with real transaction
+signatures, so the dashboard links each event to the Solana explorer. Instructions that a
+remote node signed itself (`register_miner`, `submit_result`, marked `"remote": true`) are
+logged when the coordinator sees them on chain; their signature is looked up with
+`getSignaturesForAddress` on the account they changed.
 
 ### Concurrency
 
@@ -251,8 +256,10 @@ per miner), `evolution.gif` (the flow-field frames), `startup.gif` (vorticity as
 starts around the final shape, from a dedicated run with snapshots) and `summary.json`.
 
 **Dashboard** (`dashboard/`, no build step): KPIs, the flow field of any generation with a
-player, the convergence chart, miners and their stakes, the job's economics, the event
-feed and the report. `serve.py` serves local runs and the page polls them every 2 s while
+player, the convergence chart, a timeline of the network (one row per miner, one bar per
+task from posting to result, the verifier's re-computations, caught fakes and bans), miners
+and their stakes with links to their wallets, the job's economics, the event feed and the
+report. `serve.py` serves local runs and the page polls them every 2 s while
 a run is in progress; `export_demo.py` copies the dashboard and one finished run into
 `docs/demo/` for GitHub Pages.
 

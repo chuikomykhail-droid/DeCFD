@@ -152,15 +152,17 @@ def main():
     # Seed for deterministic and reproducible demo
     random.seed(args.seed)
 
+    if (args.remote_miners or args.remote) and args.ledger != "devnet":
+        parser.error("--remote and --remote-miners need --ledger devnet")
+
     run_dir = new_run_dir(args.seed)
     history_path = os.path.join(run_dir, "history.json")
     history = {"run": os.path.basename(run_dir), "config": dict(vars(args)), "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
                "finished": False, "generations": [], "verification": None}
+    write_json(history_path, history)   # the dashboard lists the run from now on, before generation 0
     t_start = time.time()
     print(f"Run folder: {run_dir}")
 
-    if (args.remote_miners or args.remote) and args.ledger != "devnet":
-        parser.error("--remote and --remote-miners need --ledger devnet")
     ledger_options = ({"challenge_window": args.challenge_window, "network_id": args.network_id}
                       if args.ledger == "devnet" else {})
     net = ComputeNetwork(n_miners=args.miners, n_cheaters=args.cheaters, cheat_prob=args.cheat_prob,
@@ -174,6 +176,7 @@ def main():
     history["config"].update(binary_hash=net.binary_hash, cluster=net.ledger.cluster,
                              program_id=net.ledger.program_id, job_id=net.job_id,
                              network=getattr(net.ledger, "meta", {}).get("config"))
+    write_json(history_path, history)
     population = [create_random_shape() for _ in range(POPULATION_SIZE)]
     vis = Visualizer(os.path.join(run_dir, "frames"))
 
