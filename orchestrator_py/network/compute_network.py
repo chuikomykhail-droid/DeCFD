@@ -28,6 +28,7 @@ from worker_runner import WORKER_PATH, file_hash, result_hash, run_worker, sha25
 
 from .ledger import create_ledger
 from .miner import Miner, RemoteMiner
+from .solana_rpc import RpcError
 from .wallet import short
 
 
@@ -130,13 +131,16 @@ class ComputeNetwork:
         joined = {}
         t0 = time.time()
         while len(joined) < n and time.time() - t0 < self.remote_timeout:
-            for pk, acc in self.ledger.find_miners():
-                if pk not in local and pk not in joined:
-                    self.ledger.track_miner(pk)
-                    joined[pk] = acc["name"]
-                    print(f"  {acc['name']} ({short(pk)}) joined [{len(joined)}/{n}]")
+            try:
+                for pk, acc in self.ledger.find_miners():
+                    if pk not in local and pk not in joined:
+                        self.ledger.track_miner(pk)
+                        joined[pk] = acc["name"]
+                        print(f"  {acc['name']} ({short(pk)}) joined [{len(joined)}/{n}]")
+            except RpcError as e:   # a rate limit while waiting is no reason to abort the run
+                print(f"  (rpc busy: {str(e)[:60]}..., retrying)")
             if len(joined) < n:
-                time.sleep(3)
+                time.sleep(5)
         if not joined:
             raise RuntimeError(f"No remote miner joined within {self.remote_timeout} s")
         if len(joined) < n:
@@ -220,7 +224,13 @@ class ComputeNetwork:
         waiting = {s.task_id: s for s in shapes}
         t0 = time.time()
         while waiting and time.time() - t0 < self.remote_timeout:
-            for tid, chain in self.ledger.fetch_tasks(list(waiting)).items():   # one RPC call for all
+            try:
+                found = self.ledger.fetch_tasks(list(waiting))   # one RPC call for all
+            except RpcError as e:
+                print(f"  (rpc busy: {str(e)[:60]}..., retrying)")
+                time.sleep(5)
+                continue
+            for tid, chain in found.items():
                 s = waiting[tid]
                 if chain and chain["status"] != "open":
                     vals = chain["result"]

@@ -29,6 +29,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
+plt.rcParams.update({"font.family": "serif", "font.serif": ["STIXGeneral", "DejaVu Serif"],
+                     "mathtext.fontset": "stix"})   # the same type as the run report
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
 OUT = os.path.join(ROOT, "docs", "validation")

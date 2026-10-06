@@ -5,6 +5,8 @@ airdrop. Retries on rate limits (HTTP 429) and transient server errors.
 """
 import base64
 import json
+import random
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -18,31 +20,53 @@ class RpcError(RuntimeError):
     pass
 
 
+def _tls_context():
+    """System roots plus certifi's bundle: a fresh Windows install fetches root certificates
+    only when a browser needs them, so Python alone can fail to verify the RPC endpoint."""
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except (ImportError, OSError):
+        pass
+    return ctx
+
+
 class RpcClient:
-    def __init__(self, url=DEVNET, retries=6):
+    def __init__(self, url=DEVNET, retries=9):
         self.url = url
         self.retries = retries
         self._id = 0
+        self._tls = _tls_context()
 
     def call(self, method, params=None):
+        """One JSON-RPC call. Rate limits (HTTP 429: the public endpoint allows a few dozen calls
+        per 10 s per IP, shared by every machine behind one router) and transient errors are
+        retried with a growing, jittered pause: about a minute in total before giving up."""
         self._id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params or []}).encode()
-        delay = 0.5
+        delay = 1.0
         for attempt in range(self.retries):
             req = urllib.request.Request(self.url, data=body, headers={"Content-Type": "application/json"})
+            last = attempt == self.retries - 1
             try:
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=30, context=self._tls) as r:
                     reply = json.loads(r.read())
             except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 502, 503, 504) and attempt < self.retries - 1:
-                    time.sleep(delay)
-                    delay *= 2
+                if e.code in (429, 500, 502, 503, 504) and not last:
+                    wait = delay
+                    try:
+                        wait = max(wait, float(e.headers.get("Retry-After") or 0))
+                    except ValueError:
+                        pass
+                    time.sleep(wait * random.uniform(0.8, 1.3))
+                    delay = min(delay * 2, 15.0)
                     continue
                 raise RpcError(f"{method}: HTTP {e.code} {e.read()[:200]!r}") from e
-            except (urllib.error.URLError, TimeoutError) as e:
-                if attempt < self.retries - 1:
-                    time.sleep(delay)
-                    delay *= 2
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                if not last:
+                    time.sleep(delay * random.uniform(0.8, 1.3))
+                    delay = min(delay * 2, 15.0)
                     continue
                 raise RpcError(f"{method}: {e}") from e
             if "error" in reply:
@@ -107,5 +131,5 @@ class RpcClient:
             if pending:
                 if time.time() - t0 > timeout:
                     raise RpcError(f"{len(pending)} transaction(s) not confirmed after {timeout}s, e.g. {pending[0]}")
-                time.sleep(0.4)
+                time.sleep(0.6)
         return done

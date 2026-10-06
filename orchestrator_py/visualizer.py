@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
+# Serif type like the dashboard's; STIX (Times-like) ships with matplotlib, so every machine has it
+plt.rcParams.update({"font.family": "serif", "font.serif": ["STIXGeneral", "DejaVu Serif"],
+                     "mathtext.fontset": "stix"})
+
 BLUE = "#2a78d6"     # series colour (categorical slot 1)
 BODY = "#b4b2a9"     # solid cells
 INK = "#52514e"      # outlines, secondary text

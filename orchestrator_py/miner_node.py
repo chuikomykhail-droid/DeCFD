@@ -20,6 +20,7 @@ import random
 import socket
 import sys
 import time
+import traceback
 
 from solders.instruction import AccountMeta, Instruction
 from solders.message import Message
@@ -27,10 +28,9 @@ from solders.pubkey import Pubkey
 from solders.system_program import ID as SYSTEM_PROGRAM
 from solders.transaction import Transaction
 
-from network.solana_ledger import (CONFIG_SIZE, DEPLOYMENT, FUND_BUFFER, TASK_ASSIGNED_OFFSET, TASK_SIZE,
-                                   TASK_STATUS_OFFSET, SolanaWallet, _f64s, _finite, _string, _u64, decode_config,
-                                   decode_job, decode_task, ix_discriminator, load_deployment, load_keypair, miner_pda,
-                                   task_label)
+from network.solana_ledger import (CONFIG_SIZE, DEPLOYMENT, FUND_BUFFER, SolanaWallet, _f64s, _finite, _string, _u64,
+                                   decode_config, decode_job, decode_task, ix_discriminator, job_pda, load_deployment,
+                                   load_keypair, miner_pda, task_label, task_pda)
 from network.solana_rpc import RpcClient, RpcError
 from worker_runner import APP_DIR, FROZEN, WORKER_PATH, file_hash, result_hash, run_worker
 
@@ -42,6 +42,7 @@ SELFTEST_CASES = [   # thin cambered plate, thick blunt profile, symmetric profi
     ["60.0", "2.0", "8.0", "6.0", "3.0", "0.5", "-8.0", "0.0"],
 ]
 SELFTEST_SIM = ["--steps", "400", "--avg", "100"]
+NETWORK_RECHECK = 20   # seconds between looks for a newer network while joined to one
 
 
 def make_selftest():
@@ -92,6 +93,13 @@ def latest_network(rpc, program, coordinator):
     return max(((k, decode_config(d)) for k, d in found), key=lambda kc: kc[1]["network_id"])[0]
 
 
+def run_finished(rpc, program, config):
+    """True when the network's job is closed: joining would lock a stake in a finished run.
+    No job yet means the coordinator is still gathering miners, which is the time to join."""
+    got = rpc.account(job_pda(program, config, 1))
+    return got is not None and decode_job(got[0])["status"] == "closed"
+
+
 def coordinator_key(dep):
     if dep.get("coordinator"):
         return dep["coordinator"]
@@ -139,13 +147,50 @@ def compute_and_submit(rpc, program, me, config, account, addr, t, job, binary, 
         res, note = run_worker(task_args, threads=None), ""
     h = result_hash(tid, res)
     vals = [res["fx"], res["fy"], res["cd"], res["cl"]] if res.get("status") == "ok" else None
-    send(rpc, program, "submit_result",
-         [AccountMeta(config, False, False), AccountMeta(Pubkey.from_string(t["job"]), False, False),
-          AccountMeta(Pubkey.from_string(addr), False, True), AccountMeta(account, False, True),
-          AccountMeta(me.keypair.pubkey(), True, False)],
-         _f64s(_finite(vals, 4)) + bytes.fromhex(h), me)
+    took = time.time() - t0
+    # The result is worth minutes of compute: keep retrying the submission through RPC hiccups
+    for attempt in range(6):
+        try:
+            send(rpc, program, "submit_result",
+                 [AccountMeta(config, False, False), AccountMeta(Pubkey.from_string(t["job"]), False, False),
+                  AccountMeta(Pubkey.from_string(addr), False, True), AccountMeta(account, False, True),
+                  AccountMeta(me.keypair.pubkey(), True, False)],
+                 _f64s(_finite(vals, 4)) + bytes.fromhex(h), me)
+            break
+        except RpcError as e:
+            if "TaskNotOpen" in str(e):
+                return f"computed in {took:.1f} s, but the task is closed (already submitted, or reassigned)"
+            if attempt == 5:
+                raise
+            print(f"  {tid}: submit failed ({str(e)[:80]}), retrying")
+            time.sleep(5 * (attempt + 1))
     ld = res["cl"] / res["cd"] if vals and res["cd"] else 0.0
-    return f"L/D={ld:6.3f}{note}  computed in {time.time() - t0:.1f} s, submitted (hash {h[:10]})"
+    return f"L/D={ld:6.3f}{note}  computed in {took:.1f} s, submitted (hash {h[:10]})"
+
+
+def new_tasks(rpc, program, me, config, st):
+    """Open tasks assigned to this node that it has not seen yet, in order.
+
+    No getProgramAccounts here: the public RPC rate-limits it hard, and the laptops behind one
+    router share one IP. The job account counts the tasks created so far, and a task's address
+    is a PDA of (job, index), so two cheap reads find everything new."""
+    got = rpc.account(st["job"])
+    if got is None:
+        return []      # the coordinator has not opened the job yet
+    st["job_data"] = job = decode_job(got[0])
+    n = job["tasks"]
+    if n <= st["seen"]:
+        return []
+    addrs = [task_pda(program, st["job"], i) for i in range(st["seen"], n)]
+    mine = []
+    for addr, acc in zip(addrs, rpc.accounts(addrs)):
+        if acc is None:
+            break      # created, but this RPC node is a slot behind: read it next time
+        st["seen"] += 1
+        t = decode_task(acc[0])
+        if t["assigned"] == me.pubkey and t["status"] == "open":
+            mine.append((str(addr), t))
+    return mine
 
 
 def main():
@@ -182,51 +227,47 @@ def main():
     if not args.config and not coordinator:
         sys.exit("No coordinator known: pass --config <network address>")
 
-    current, account, jobs, done = None, None, {}, set()
-    last_lookup = 0.0
+    current, account, st = None, None, None
+    last_lookup, idle_note = 0.0, False
     print("Waiting for a network..." if not args.config else "")
     while True:
         try:
             if args.config:
                 target = Pubkey.from_string(args.config)
-            elif time.time() - last_lookup > 10 or current is None:
+            elif current is None or time.time() - last_lookup > NETWORK_RECHECK:
+                # A new run is a new network; while joined, look for one only now and then
                 found = latest_network(rpc, program, coordinator)
                 last_lookup = time.time()
-                target = Pubkey.from_string(found) if found else None
+                target = Pubkey.from_string(found) if found else current
             else:
                 target = current
+            if target is not None and target != current and run_finished(rpc, program, target):
+                if not idle_note:   # the newest network is a finished run: wait for the next one
+                    print("No run in progress: waiting for the coordinator to start one...")
+                    idle_note = True
+                target = current
             if target is None:
-                time.sleep(5)
+                time.sleep(10)
                 continue
             if target != current:
+                idle_note = False
                 account = join(rpc, program, me, target, args)
-                current, jobs, done = target, {}, set()
+                current = target
+                st = {"job": job_pda(program, current, 1), "seen": 0, "job_data": None}
                 print("Polling for tasks...")
 
-            found = rpc.program_accounts(program, [
-                {"dataSize": TASK_SIZE},
-                {"memcmp": {"offset": TASK_ASSIGNED_OFFSET, "bytes": me.pubkey}},
-                {"memcmp": {"offset": TASK_STATUS_OFFSET, "bytes": "1"}}])   # base58 of b"\x00" = open
-            for addr, data in sorted(found, key=lambda a: a[1][73:77]):
-                if addr in done:
-                    continue      # submitted already; the RPC node may still be a slot behind
-                t = decode_task(data)
-                if t["job"] not in jobs:
-                    jobs[t["job"]] = decode_job(rpc.account(t["job"])[0])
-                job = jobs[t["job"]]
-                if job["config"] != str(current):
-                    continue      # a task left open by an earlier run
+            for addr, t in new_tasks(rpc, program, me, current, st):
                 tid = task_label(t["epoch"], t["index"])
                 try:
-                    print(f"  {tid}: {compute_and_submit(rpc, program, me, current, account, addr, t, job, binary, args)}")
-                    done.add(addr)
+                    print(f"  {tid}: "
+                          f"{compute_and_submit(rpc, program, me, current, account, addr, t, st['job_data'], binary, args)}")
                 except RpcError as e:
                     print(f"  {tid}: submit failed: {e}")
         except RpcError as e:
-            print(f"  rpc: {e}")
-            time.sleep(args.poll * 3)
+            print(f"  rpc: {str(e)[:120]}")
+            time.sleep(args.poll * 5)
             continue
-        time.sleep(args.poll)
+        time.sleep(args.poll * random.uniform(0.8, 1.2))   # jitter: nodes behind one IP do not poll in step
 
 
 if __name__ == "__main__":
@@ -234,6 +275,12 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nStopped.")
+    except Exception:
+        if not FROZEN:
+            raise
+        # Print it now: an uncaught exception would only show after "Press Enter to close"
+        traceback.print_exc()
+        sys.exit(1)
     finally:
         if FROZEN:   # keep the console window open after an error
             try:
