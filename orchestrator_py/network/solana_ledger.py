@@ -198,31 +198,61 @@ class SolanaLedger(Ledger):
         t = lamports / self.lpt
         return int(t) if t == int(t) else round(t, 2)
 
-    def _blockhash(self):
-        if self._bh is None or time.time() - self._bh_time > 30:
+    def _blockhash(self, fresh=False):
+        if fresh or self._bh is None or time.time() - self._bh_time > 20:
             self._bh, self._bh_time = self.rpc.latest_blockhash(), time.time()
         return self._bh
 
     def _send(self, ixs, signers, payer):
-        uniq = {}
+        keys = {}
         for w in [payer] + list(signers):
-            uniq[w.pubkey] = w.keypair
-        bh = self._blockhash()
-        tx = Transaction(list(uniq.values()), Message.new_with_blockhash(ixs, payer.keypair.pubkey(), bh), bh)
-        try:
-            sig = self.rpc.send(bytes(tx))
-        except RpcError as e:
-            raise LedgerError(str(e)) from e
-        self._pending.append(sig)
-        return sig
+            keys[w.pubkey] = w.keypair
+        p = {"ixs": ixs, "keys": list(keys.values()), "payer": payer.keypair.pubkey()}
+        self._submit(p)
+        self._pending.append(p)
+        return p["sig"]
+
+    def _submit(self, p, fresh=False):
+        """Sign and send. The public RPC is a load balancer: a blockhash fetched from one node can
+        be unknown to the node that simulates the transaction a moment later. Such a transaction
+        was rejected before execution, so it is simply signed again with a newer blockhash."""
+        for attempt in range(5):
+            bh = self._blockhash(fresh=fresh or attempt > 0)
+            tx = Transaction(p["keys"], Message.new_with_blockhash(p["ixs"], p["payer"], bh), bh)
+            try:
+                p["sig"], p["bh"] = self.rpc.send(bytes(tx)), bh
+                return
+            except RpcError as e:
+                if "BlockhashNotFound" not in str(e) or attempt == 4:
+                    raise LedgerError(str(e)) from e
+                time.sleep(1 + attempt)
 
     def _sync(self):
-        if self._pending:
+        """Wait for every pending transaction. Devnet occasionally drops one: once its blockhash
+        has expired it can never land, so it is sent again then (never twice in flight)."""
+        pending = self._pending
+        for _ in range(4):
+            if not pending:
+                break
             try:
-                self.rpc.wait(self._pending)
+                self.rpc.wait([p["sig"] for p in pending], timeout=60)
+                break
             except RpcError as e:
-                raise LedgerError(str(e)) from e
-            self._pending = []
+                if "not confirmed" not in str(e):
+                    raise LedgerError(str(e)) from e
+            statuses = self.rpc.statuses([p["sig"] for p in pending])
+            pending = [p for p, st in zip(pending, statuses)
+                       if not (st and st.get("confirmationStatus") in ("confirmed", "finalized"))]
+            for p in pending:
+                while self.rpc.call("isBlockhashValid", [str(p["bh"]), {"commitment": "confirmed"}])["value"]:
+                    time.sleep(3)
+                if self.rpc.statuses([p["sig"]])[0]:   # it landed while the blockhash was still valid
+                    continue
+                print(f"  (devnet dropped transaction {p['sig'][:12]}..., sending it again)")
+                self._submit(p, fresh=True)
+        else:
+            raise LedgerError(f"{len(pending)} transaction(s) not confirmed, even after resending")
+        self._pending = []
 
     def _ix(self, kind, ix_name, accounts, data, signers, payer, event, **fields):
         """Send one program instruction; wait for earlier ones first if this step depends on them."""

@@ -78,9 +78,18 @@ def run_selftest():
 
 def send(rpc, program, name, accounts, data, wallet):
     ix = Instruction(program, ix_discriminator(name) + data, accounts)
-    bh = rpc.latest_blockhash()
-    tx = Transaction([wallet.keypair], Message.new_with_blockhash([ix], wallet.keypair.pubkey(), bh), bh)
-    sig = rpc.send(bytes(tx))
+    for attempt in range(5):
+        bh = rpc.latest_blockhash()
+        tx = Transaction([wallet.keypair], Message.new_with_blockhash([ix], wallet.keypair.pubkey(), bh), bh)
+        try:
+            sig = rpc.send(bytes(tx))
+            break
+        except RpcError as e:
+            # The RPC load balancer: the simulating node may not know a blockhash from another one yet.
+            # The transaction did not execute, so sign it again with a newer blockhash
+            if "BlockhashNotFound" not in str(e) or attempt == 4:
+                raise
+            time.sleep(1 + attempt)
     rpc.wait([sig])
     return sig
 
