@@ -1,9 +1,9 @@
 [
   {
     "name": "run",
-    "label": "20261005-145234_seed42",
+    "label": "20261006-215931_seed42",
     "finished": true,
-    "generations": 20,
-    "best_ld": 2.266033491365903
+    "generations": 30,
+    "best_ld": 2.3918628924679033
   }
 ]

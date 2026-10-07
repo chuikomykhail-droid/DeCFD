@@ -1,34 +1,53 @@
 {
-  "cluster": "mock",
-  "program_id": "DeCFD111111111111111111111111111111111111111",
+  "cluster": "devnet",
+  "program_id": "5ChZDUU3RrNuUBHUBfNgFhj44bNoq5VRQ7cTXwrLrQPC",
+  "network_id": 1791313172,
+  "lamports_per_token": 100000,
+  "config": "9hWNz23xVGAvCwNAzErVEZRMDDHedgEEV61PA3hxFHCF",
   "participants": {
-    "2DxS4mQem2t8wvY42PaP76aN1ktdps6uusurx3bm3oLx": {
+    "5Ckhcu6XhsPxucP6ojtuyRMppdvLKgemDtgxp9YGi4xk": {
       "role": "client",
       "name": "client"
     },
-    "EHcKPG5iG3XFDBJnUYXNP12xFBfxLrkoPvZoKBs9eer4": {
+    "BSe8ufRURQW38wfR6jskV7zp898SJw63p1YMDkyc7RL4": {
       "role": "verifier",
       "name": "verifier"
     },
-    "8arG1Nc9BQf6k4ZpMLpWJaA2ieFHF2kVQrgZDvSeummZ": {
+    "CK6gTH5PATE7SGZoivrhXP9UbtxVyLtHWgAYA9pLZpxH": {
       "role": "miner",
       "name": "miner-1",
-      "honest": true
+      "honest": true,
+      "remote": false
     },
-    "5sTVTy7Eh1HiBNCPvAmCVN8APi8XVqF6c8enZFX2F6Fn": {
+    "3wDMTymuizTSHW9rmQ1x3Rfbbbsbk2rsiurE6FPDTznJ": {
       "role": "miner",
       "name": "miner-2",
-      "honest": true
+      "honest": false,
+      "remote": false
     },
-    "7zKmgWQ96x3PUfsjJVLwPP5VaV54iYLQk8nU1y8xyHTo": {
+    "5ujXT9ADzUvL6w76PLWAjTrAQvNoa5W1US5ujRDHgWVY": {
       "role": "miner",
-      "name": "miner-3",
-      "honest": true
+      "name": "laptop2",
+      "honest": null,
+      "remote": true
     },
-    "C8k2x4s4pwGuyM5JDHQB45SvokegptteFB5VyU8cc5bh": {
+    "rritcavYDADzovwCeUYieAqto149jBioPophdZCVbwK": {
       "role": "miner",
-      "name": "miner-4",
-      "honest": false
+      "name": "laptop1",
+      "honest": null,
+      "remote": true
+    },
+    "3kLsceory3xBKB71bNRGBda3UqfUjjrqfAPRtDgrNmZH": {
+      "role": "miner",
+      "name": "laptop4",
+      "honest": null,
+      "remote": true
+    },
+    "8jYJiuJTG7JnRJd1rvzp8xaJUZJDTtf1KK9gckzrvn2C": {
+      "role": "miner",
+      "name": "laptop3",
+      "honest": null,
+      "remote": true
     }
   }
 }

@@ -6,9 +6,11 @@ compute task. Miners run a deterministic CFD solver, commit to their results by 
 get paid per task. A verifier re-computes a sample of the results; a miner caught faking
 a result loses stake, part of which rewards the verifier.
 
-In v1 everything runs on one machine and the blockchain is an in-memory mock. The mock is
-written as the specification of the Solana program and sits behind a `Ledger` interface,
-so a devnet backend replaces it without touching the GA, the network logic or the dashboard.
+All chain access goes through a `Ledger` interface with two implementations: the Anchor
+program deployed on Solana devnet (`SolanaLedger`), and an in-memory mock of the same rules
+for tests and offline runs. The GA, the network logic and the dashboard do not know which one
+is in use. Miners are either threads of the coordinator or remote nodes (`miner_node.py`) on
+other machines, which find their tasks on chain and sign their own results.
 
 > This file describes the system as built. The original one-page spec that started the
 > project is in git history: `git show 1a38afa:architecture.md`.
@@ -24,9 +26,12 @@ flowchart LR
     V --> W
     W -->|subprocess| X["worker_cpp/worker.exe<br/>LBM D2Q9"]
     NET -->|signed instructions| L{{"Ledger interface<br/>network/ledger.py"}}
-    L -.->|v1| MOCK["MockSolanaProgram<br/>mock_ledger.py"]
-    L -.->|next| SOL["Solana devnet backend"]
+    L -.->|--ledger mock| MOCK["MockSolanaProgram<br/>mock_ledger.py"]
+    L -.->|--ledger devnet| SOL["SolanaLedger<br/>solana_ledger.py"]
+    SOL -->|JSON-RPC| PROG[("Anchor program<br/>on devnet")]
+    NODE["miner_node.py<br/>remote machines"] -->|own signed results| PROG
     MOCK --> LOG[("ledger_tx.jsonl")]
+    SOL --> LOG
     GA --> H[("history.json<br/>frames, fields")]
     H --> REP["report.py"]
     H --> DASH["dashboard/"]
@@ -40,8 +45,12 @@ flowchart LR
 | `orchestrator_py/network/compute_network.py` | Dispatch, audits, slashing flow, settlement; the GA's only entry point to the network |
 | `orchestrator_py/network/ledger.py` | `Ledger` interface: accounts, instructions, event log. The spec of the Solana program |
 | `orchestrator_py/network/mock_ledger.py` | In-memory implementation of `Ledger` |
+| `orchestrator_py/network/solana_ledger.py`, `solana_rpc.py` | `Ledger` on the devnet program: hand-encoded Anchor instructions, PDAs, a minimal JSON-RPC client |
+| `solana/programs/decfd/src/lib.rs` | The Anchor program: config, miner, job and task accounts and their instructions |
+| `orchestrator_py/miner_node.py` | Remote miner: self-test, joins the coordinator's newest network, computes and submits its tasks |
+| `orchestrator_py/package_miner.py`, `devnet.py` | Packaged miner for Windows machines without Python; devnet setup, status and funding |
 | `orchestrator_py/network/wallet.py` | Signing identities (mock: HMAC; devnet: ed25519 keypairs) |
-| `orchestrator_py/network/miner.py` | Mock miners. A "lazy" miner sometimes returns made-up numbers |
+| `orchestrator_py/network/miner.py` | Local miners (a "lazy" one sometimes returns made-up numbers) and the stand-in for a remote node |
 | `orchestrator_py/worker_runner.py` | Runs the binary, parses its output, computes result hashes |
 | `orchestrator_py/visualizer.py`, `geometry.py` | Flow-field storage and per-generation frames; shape outlines |
 | `orchestrator_py/report.py` | Static report of a run (figures, animations, summary.json) |
@@ -321,20 +330,22 @@ at a fixed Cl over several operating points. Only the fitness function would cha
 network layer is independent of the objective.
 
 **Network.**
-- Miners are threads of one process, and the ledger is an in-memory mock.
+- The program runs on devnet only. Task accounts are not closed after payment, so their rent
+  (≈ 0.003 SOL each) is not reclaimed yet.
 - There is a single trusted verifier. It earns a share of slashed stake but no fee per audit.
-- Bit-exact comparison assumes an identical binary. Even then, CRT `sin`/`cos` can pick
-  different code paths on different CPUs, and in rare cases a boundary cell could flip,
-  failing an honest miner. A real deployment needs integer or fixed-point rasterization or a
-  tolerance-based comparison, plus reproducible builds.
+- Bit-exact comparison assumes an identical binary; the job pins its hash. Even then, CRT
+  `sin`/`cos` can pick different code paths on different CPUs, and in rare cases a boundary
+  cell could flip, failing an honest miner. A node therefore re-computes reference cases
+  before it joins and stays out if its bits differ. A real deployment needs integer or
+  fixed-point rasterization or a tolerance-based comparison, plus reproducible builds.
 - A miner-side failure such as a timeout hashes as an error and would be slashed. The worker timeout is therefore generous (300 s).
 - A faked result that is never sampled and never the leader (nor a parent, with `--parent-audit`) goes undetected. It can still win tournaments and pass its genes on; the children are evaluated honestly. The end-of-run report counts these cases.
 
 ## 8. Roadmap
 
-1. **Solana devnet backend.** An Anchor program implementing §4 one instruction per
-   method, and a `SolanaLedger(Ledger)` client (wallets become ed25519 keypairs, `airdrop`
-   maps to `requestAirdrop`, events carry real signatures). Then `app.py --ledger devnet`.
-2. Miners as separate processes or hosts that pull tasks from a queue and sign their own submissions.
-3. Client-defined objectives: minimum Cd at fixed Cl, several angles of attack, geometry constraints.
-4. A verifier fee per audit and a decentralized verifier set.
+Done since v1: the Anchor program on devnet with `SolanaLedger`, and remote miner nodes that
+sign their own submissions (the demo run used four laptops).
+
+1. Close task accounts on settlement to return their rent to the client.
+2. Client-defined objectives: minimum Cd at fixed Cl, several angles of attack, geometry constraints.
+3. A verifier fee per audit and a decentralized verifier set.
