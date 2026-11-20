@@ -333,11 +333,15 @@ network layer is independent of the objective.
 - The program runs on devnet only. Task accounts are not closed after payment, so their rent
   (≈ 0.003 SOL each) is not reclaimed yet.
 - There is a single trusted verifier. It earns a share of slashed stake but no fee per audit.
-- Bit-exact comparison assumes an identical binary; the job pins its hash. Even then, CRT
-  `sin`/`cos` can pick different code paths on different CPUs, and in rare cases a boundary
-  cell could flip, failing an honest miner. A node therefore re-computes reference cases
-  before it joins and stays out if its bits differ. A real deployment needs integer or
-  fixed-point rasterization or a tolerance-based comparison, plus reproducible builds.
+- Bit-exact comparison assumes an identical binary; the job pins its hash. The worker uses
+  only operations that IEEE 754 rounds exactly: its own `sin`/`cos` built from addition,
+  multiplication and division instead of the CRT ones, which can pick different code paths
+  on different CPUs, and no fused multiply-add. The same binary should therefore give the
+  same bits on every x86 CPU. A node still re-computes reference cases before it joins and
+  stays out if its bits differ. GPUs would not be bit-exact even with one binary; they would
+  need a tolerance-based comparison. Builds are not reproducible yet: MSVC stamps the link
+  time into the binary, so a rebuild of the same source has a new hash and needs a new
+  `selftest.json`.
 - A miner-side failure such as a timeout hashes as an error and would be slashed. The worker timeout is therefore generous (300 s).
 - A faked result that is never sampled and never the leader (nor a parent, with `--parent-audit`) goes undetected. It can still win tournaments and pass its genes on; the children are evaluated honestly. The end-of-run report counts these cases.
 

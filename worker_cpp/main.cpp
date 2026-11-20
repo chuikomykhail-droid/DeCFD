@@ -161,6 +161,34 @@ static void apply_bc(real* const* d, const real* feq_in) {
     }
 }
 
+// sin and cos built from + - * / and floor only. Those operations are exactly rounded by
+// IEEE 754, so the same binary gives the same bits on every x86 CPU. The CRT versions may
+// pick a different code path per CPU (with or without FMA3), and the rasterizer must give
+// every node the same body. Accurate to about one ulp for the angles used here (|x| < 10).
+static void det_sincos(double x, double& s, double& c) {
+    const double TWO_OVER_PI = 6.36619772367581382433e-01;
+    const double PIO2_HI = 1.57079632673412561417e+00;   // first 33 bits of pi/2
+    const double PIO2_LO = 6.07710050650619224932e-11;   // pi/2 - PIO2_HI
+    const double k = std::floor(x * TWO_OVER_PI + 0.5);
+    const double r = (x - k * PIO2_HI) - k * PIO2_LO;    // |r| <= pi/4
+    const double z = r * r;
+    // Taylor series; the first omitted terms are below 1e-17 for |r| <= pi/4
+    const double ps = r + r * z * (-1.0 / 6 + z * (1.0 / 120 + z * (-1.0 / 5040 + z * (1.0 / 362880
+                    + z * (-1.0 / 39916800 + z * (1.0 / 6227020800.0 + z * (-1.0 / 1307674368000.0
+                    + z * (1.0 / 355687428096000.0))))))));
+    const double pc = 1.0 + z * (-0.5 + z * (1.0 / 24 + z * (-1.0 / 720 + z * (1.0 / 40320
+                    + z * (-1.0 / 3628800 + z * (1.0 / 479001600 + z * (-1.0 / 87178291200.0
+                    + z * (1.0 / 20922789888000.0))))))));
+    switch (((long long)k % 4 + 4) % 4) {
+        case 0:  s = ps;  c = pc;  break;
+        case 1:  s = pc;  c = -ps; break;
+        case 2:  s = -ps; c = -pc; break;
+        default: s = -pc; c = ps;  break;
+    }
+}
+
+static double det_cos(double x) { double s, c; det_sincos(x, s, c); return c; }
+
 struct Shape {
     double L, T[5], alpha_deg, camber;
     bool cylinder;   // validation mode: circle of diameter L instead of the airfoil
@@ -171,7 +199,8 @@ static bool build_geometry(const Shape& sh, std::vector<real>& sol,
                            std::vector<int>& smin, std::vector<int>& smax) {
     const double PI = 3.14159265358979323846;
     const double a = sh.alpha_deg * PI / 180.0;
-    const double ca = std::cos(a), sa = std::sin(a);
+    double sa, ca;
+    det_sincos(a, sa, ca);
 
     smin.assign(Rows, INT_MAX); smax.assign(Rows, -1);
     sol.assign(PLANE, real(0));
@@ -194,7 +223,7 @@ static bool build_geometry(const Shape& sh, std::vector<real>& sol,
                 const int seg = std::min((int)(s / seg_len), nseg - 1);
                 const double x0 = seg * seg_len, x1 = (seg + 1) * seg_len;
                 const double fr = (s - x0) / (x1 - x0);
-                const double mu = (1.0 - std::cos(fr * PI)) / 2.0;
+                const double mu = (1.0 - det_cos(fr * PI)) / 2.0;
                 const double halfT = (sh.T[seg] * (1.0 - mu) + sh.T[seg + 1] * mu) / 2.0;
                 const double yc = 4.0 * sh.camber * (s / sh.L) * (1.0 - s / sh.L);
                 is_s = std::fabs(yb - yc) <= halfT;
