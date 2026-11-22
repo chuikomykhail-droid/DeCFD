@@ -207,7 +207,7 @@ def main():
     ap = argparse.ArgumentParser(description="DeCFD miner node (devnet)")
     ap.add_argument("--name", default=default_name, help="miner name (max 16 bytes); key: keys/node-<name>.json")
     ap.add_argument("--config", help="join this network only (default: follow the coordinator's newest network)")
-    ap.add_argument("--stake", type=int, default=100, help="stake in tokens")
+    ap.add_argument("--stake", type=int, default=400, help="stake in tokens")
     ap.add_argument("--lamports-per-token", type=int, default=100_000)
     ap.add_argument("--cheat-prob", type=float, default=0.0, help="fake this share of results (to demo slashing)")
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between task polls")

@@ -58,7 +58,7 @@ def _result_values(res):
 
 class ComputeNetwork:
     def __init__(self, n_miners=4, n_cheaters=1, verify_rate=0.2, cheat_prob=0.5, seed=7,
-                 reward=10, stake=100, min_stake=50, slash_frac=0.5, verifier_share=0.5,
+                 reward=10, stake=400, min_stake=200, slash_frac=0.5, verifier_share=0.5,
                  client_funds=100_000, sim_args=(), ledger="mock", ledger_options=None,
                  remote_miners=(), remote_count=0, remote_timeout=600, log_dir=None, verbose=True):
         if n_cheaters >= n_miners:
@@ -68,6 +68,14 @@ class ComputeNetwork:
         self.reward = reward
         self.sim_args = list(sim_args)  # solver settings shared by every task of the job
         self.verbose = verbose
+
+        # A fake must cost more than it earns. An audit catches it with probability at least
+        # verify_rate, and a miner may stake as little as min_stake, so the first catch costs at
+        # least slash_frac * min_stake. Keep that expected penalty at twice the reward or more.
+        margin = verify_rate * slash_frac * min_stake / reward
+        if margin < 2:
+            print(f"Warning: a faked result costs only {margin:.1f}x the reward in expectation; "
+                  f"raise verify_rate, slash_frac or min_stake")
 
         self.log_dir = log_dir or os.path.join(os.path.dirname(os.path.dirname(__file__)), "network_logs")
         os.makedirs(self.log_dir, exist_ok=True)

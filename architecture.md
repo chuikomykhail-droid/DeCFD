@@ -198,15 +198,20 @@ sequenceDiagram
 
 ### Economics
 
-Defaults: reward 10 per task, stake 100, minimum stake 50, slash 50% of the stake, verifier
+Defaults: reward 10 per task, stake 400, minimum stake 200, slash 50% of the stake, verifier
 share 50% of the slash, random audit rate 20%.
 
 A fake is caught with probability at least `verify_rate` (more if it becomes the leader,
 or if the miner was already caught this epoch). Faking is unprofitable when
-`P(caught) × slash > reward`. With the defaults the first fake is break-even in expectation
-(0.2 × 50 = 10); the second catch bans the miner, which also forfeits all future income
-and the remaining stake, so repeated cheating loses. A stricter margin needs a higher
-audit rate or slash; both are one parameter each.
+`P(caught) × penalty > reward`. A miner may stake as little as the minimum, so the first
+catch costs at least half of it, 100, and the expected penalty of a first fake is at least
+0.2 × 100 = 20, twice the reward. With the default stake it is 0.2 × 200 = 40. A miner at
+the minimum is banned on its first catch, one with the default stake on its second; a
+banned miner also loses all future income. `ComputeNetwork` prints a warning when
+`verify_rate × slash × min_stake` falls below twice the reward.
+
+The recorded demo run used the earlier defaults (stake 100, minimum 50), with which the
+first fake was only break-even: 0.2 × 50 = 10.
 
 ### Event log (the contract with the dashboard)
 
@@ -333,6 +338,9 @@ network layer is independent of the objective.
 - The program runs on devnet only. Task accounts are not closed after payment, so their rent
   (≈ 0.003 SOL each) is not reclaimed yet.
 - There is a single trusted verifier. It earns a share of slashed stake but no fee per audit.
+- There is no instruction to withdraw a stake yet: it stays locked in the miner's account,
+  for honest and banned miners alike. Mainnet needs an unstake with a delay longer than the
+  challenge window, so a miner cannot pull its stake before its last tasks are audited.
 - Bit-exact comparison assumes an identical binary; the job pins its hash. The worker uses
   only operations that IEEE 754 rounds exactly: its own `sin`/`cos` built from addition,
   multiplication and division instead of the CRT ones, which can pick different code paths
@@ -350,6 +358,7 @@ network layer is independent of the objective.
 Done since v1: the Anchor program on devnet with `SolanaLedger`, and remote miner nodes that
 sign their own submissions (the demo run used four laptops).
 
-1. Close task accounts on settlement to return their rent to the client.
+1. Close task accounts on settlement to return their rent to the client, and let miners
+   withdraw their stake after a delay.
 2. Client-defined objectives: minimum Cd at fixed Cl, several angles of attack, geometry constraints.
 3. A verifier fee per audit and a decentralized verifier set.

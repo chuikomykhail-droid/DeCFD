@@ -1,4 +1,5 @@
 """End to end: tasks go through miners, a lazy miner gets caught, the books balance."""
+import inspect
 import os
 import random
 import sys
@@ -58,6 +59,14 @@ class NetworkTest(unittest.TestCase):
         net.evaluate_batch(second, gen=1)
         self.assertTrue(all(s.miner.honest for s in second))
         net.ledger.close()
+
+
+class EconomicsTest(unittest.TestCase):
+    def test_default_fake_costs_twice_the_reward(self):
+        # A miner at the minimum stake loses slash_frac of it when an audit catches a fake
+        d = {k: p.default for k, p in inspect.signature(ComputeNetwork.__init__).parameters.items()}
+        expected_penalty = d["verify_rate"] * d["slash_frac"] * d["min_stake"]
+        self.assertGreaterEqual(expected_penalty, 2 * d["reward"])
 
 
 if __name__ == "__main__":
