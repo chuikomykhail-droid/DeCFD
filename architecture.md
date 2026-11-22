@@ -131,6 +131,13 @@ using all cores, or ≈ 15 s on one.
 Both checks run before the epoch is settled, so a miner caught by them is never paid
 for that task.
 
+**Audit sample.** A task is audited when `sha256(seed:task_id)`, read as a number in [0, 1),
+is below `verify_rate`. The seed is fresh and secret for every run, so a miner cannot tell
+which of its tasks will be checked. The run prints the seed's hash and stores it in
+`history.json` before the first task, and reveals the seed at the end, so anyone can
+recompute every audit decision and check that the verifier did not pick its targets.
+`--audit-seed` fixes the seed to replay a run.
+
 ## 4. Network and ledger
 
 ### The `Ledger` interface
@@ -338,6 +345,8 @@ network layer is independent of the objective.
 - The program runs on devnet only. Task accounts are not closed after payment, so their rent
   (≈ 0.003 SOL each) is not reclaimed yet.
 - There is a single trusted verifier. It earns a share of slashed stake but no fee per audit.
+- The audit seed's hash is published in the run's log, not on chain. On chain, the sample
+  could come from a blockhash after the result is submitted, or from a VRF oracle.
 - There is no instruction to withdraw a stake yet: it stays locked in the miner's account,
   for honest and banned miners alike. Mainnet needs an unstake with a delay longer than the
   challenge window, so a miner cannot pull its stake before its last tasks are audited.

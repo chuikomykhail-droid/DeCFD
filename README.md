@@ -152,13 +152,14 @@ tested yet.
 | `--cheaters` | 1 | how many of them are lazy |
 | `--cheat-prob` | 0.5 | chance a lazy miner fakes a task |
 | `--verify-rate` | 0.2 | fraction of tasks audited at random |
+| `--audit-seed` | fresh, secret | seed that picks the audited tasks; pass one to replay a run |
 | `--parent-audit` | off | also audit every unverified tournament winner before it reproduces |
 | `--steps`, `--avg` | 6000, 2000 | solver steps per evaluation and steps averaged (job-wide) |
 | `--ledger` | mock | `mock` (in memory) or `devnet` (the deployed Solana program) |
 | `--remote` | 0 | devnet: wait for N miner nodes to join on their own |
 | `--remote-timeout` | 600 | devnet: seconds to wait for nodes to join, and for a node's result |
 | `--challenge-window` | 10 | devnet: seconds before an unaudited task can be settled |
-| `--seed` | 42 | GA seed; runs are reproducible |
+| `--seed` | 42 | GA seed; together with `--audit-seed` a run is reproducible |
 | `--quiet-net` | off | hide per-task log lines (fraud events are still shown) |
 
 ## How it works
@@ -168,7 +169,7 @@ Each generation of the GA is one network epoch:
 1. The client opens a **job** once per run and escrows its budget. The job pins the hash of `worker.exe`.
 2. Every new shape becomes a **task** that reserves one reward and pins the hash of its parameters.
 3. Miners compute in parallel and **submit a hash** of their result.
-4. The verifier re-computes a random 20% of tasks plus the generation leader before it becomes the elite.
+4. The verifier re-computes a random 20% of tasks plus the generation leader before it becomes the elite. A secret seed picks the 20%; its hash is published at the start and the seed at the end, so miners can't predict the sample and anyone can check it afterwards.
 5. A mismatch **slashes** the miner and triggers a re-audit of its other work in this epoch.
 6. Every surviving task is **settled** (paid). At the end the unspent budget returns to the client.
 

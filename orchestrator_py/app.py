@@ -123,6 +123,8 @@ def main():
     parser.add_argument('--cheaters', type=int, default=1, help='How many of the miners are lazy (fake results)')
     parser.add_argument('--cheat-prob', type=float, default=0.5, help='Probability a lazy miner fakes a given task')
     parser.add_argument('--verify-rate', type=float, default=0.2, help='Fraction of tasks randomly audited')
+    parser.add_argument('--audit-seed', default=None,
+                        help='Seed that picks the audited tasks, to replay a run. Default: a fresh secret one')
     parser.add_argument('--parent-audit', action='store_true',
                         help='Also audit every unverified tournament winner before it reproduces (~2.5x more audits)')
     parser.add_argument('--steps', type=int, default=6000, help='LBM steps per evaluation (job-wide solver setting)')
@@ -170,10 +172,12 @@ def main():
                          ledger=args.ledger, ledger_options=ledger_options, remote_miners=args.remote_miners,
                          remote_count=args.remote,
                          remote_timeout=args.remote_timeout, log_dir=os.path.join(run_dir, "network"),
-                         verbose=not args.quiet_net)
+                         verbose=not args.quiet_net, audit_seed=args.audit_seed)
+    print(f"Audit seed commitment (sha256 of the seed, revealed at the end): {net.audit_commitment}")
     # Budget for the worst case: every shape of every generation is a new task
     net.open_job(budget=POPULATION_SIZE * GENERATIONS * net.reward)
-    history["config"].update(binary_hash=net.binary_hash, cluster=net.ledger.cluster,
+    history["config"].update(binary_hash=net.binary_hash, audit_commitment=net.audit_commitment,
+                             cluster=net.ledger.cluster,
                              program_id=net.ledger.program_id, job_id=net.job_id,
                              network=getattr(net.ledger, "meta", {}).get("config"))
     write_json(history_path, history)
@@ -336,6 +340,7 @@ def main():
         print(f"  Short Run ({args.steps} steps) L/D: {best_overall.ld:.3f}")
         print(f"  Long Run (30k steps) L/D: {v_ld:.3f}")
         print(f"  Drag: {v_drag:.5f}, Lift: {v_lift:.5f}")
+    history["audit_seed"] = net.audit_seed   # the reveal: every audit decision can now be recomputed
     history["finished"] = True
     history["elapsed"] = round(time.time() - t_start, 1)
     write_json(history_path, history)

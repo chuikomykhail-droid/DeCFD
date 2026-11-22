@@ -18,9 +18,11 @@ Solana devnet program. Local miners are threads of this process with their own w
 remote miners (miner_node.py, possibly on another computer) find the tasks assigned to them
 on chain and publish their results there.
 """
+import hashlib
 import json
 import os
 import random
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -56,14 +58,29 @@ def _result_values(res):
     return [res["fx"], res["fy"], res["cd"], res["cl"]] if res.get("status") == "ok" else None
 
 
+def audit_draw(seed, task_id):
+    """A number in [0, 1) from sha256(seed, task): a task is audited when it is below
+    verify_rate. Without the seed nobody can tell in advance which tasks will be checked;
+    with it, anyone can recompute the whole sample afterwards."""
+    digest = hashlib.sha256(f"{seed}:{task_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") / 2**64
+
+
 class ComputeNetwork:
     def __init__(self, n_miners=4, n_cheaters=1, verify_rate=0.2, cheat_prob=0.5, seed=7,
                  reward=10, stake=400, min_stake=200, slash_frac=0.5, verifier_share=0.5,
                  client_funds=100_000, sim_args=(), ledger="mock", ledger_options=None,
-                 remote_miners=(), remote_count=0, remote_timeout=600, log_dir=None, verbose=True):
+                 remote_miners=(), remote_count=0, remote_timeout=600, log_dir=None, verbose=True,
+                 audit_seed=None):
         if n_cheaters >= n_miners:
             raise ValueError("Need at least one honest miner")
-        self.rng = random.Random(seed)  # separate RNG: network randomness must not perturb the GA
+        self.rng = random.Random(seed)  # mock wallets only; must not perturb the GA's random state
+        # The audit sample must stay secret until miners have committed their results, so it
+        # comes from a fresh random seed. Its hash is published at the start and the seed itself
+        # at the end, so anyone can then check that the verifier did not pick its targets.
+        # A fixed seed makes a demo run reproducible.
+        self.audit_seed = audit_seed if audit_seed is not None else secrets.token_hex(32)
+        self.audit_commitment = sha256_hex(self.audit_seed.encode())
         self.verify_rate = verify_rate
         self.reward = reward
         self.sim_args = list(sim_args)  # solver settings shared by every task of the job
@@ -214,8 +231,8 @@ class ComputeNetwork:
         self.stats["tasks"] += len(shapes)
         self._pending.extend(s for s in shapes if s.evaluated)
 
-        # Optimistic verification: random audit (sampled in a fixed order -> reproducible)
-        sample = [s for s in shapes if self.rng.random() < self.verify_rate]
+        # Optimistic verification: a random audit that miners cannot predict
+        sample = [s for s in shapes if audit_draw(self.audit_seed, s.task_id) < self.verify_rate]
         if sample:
             self.verify_many(sample, reason="random audit")
 
@@ -319,6 +336,7 @@ class ComputeNetwork:
         print(f"Program {snap['program_id'][:12]}.. ({snap['cluster']})  slot {snap['slot']}  "
               f"binary {self.binary_hash[:12]}..")
         print(f"Tasks: {self.stats['tasks']}  audits: {self.stats['audits']}  fraud caught: {self.stats['caught']}")
+        print(f"Audit seed (its sha256 was the commitment {self.audit_commitment[:12]}..): {self.audit_seed}")
         paid = sum(m["earned"] for m in snap["miners"].values())
         print(f"Job {self.job_id}: budget {job.get('budget')}  paid to miners {paid}  "
               f"refunded {self.refund}  status {job.get('status')}")

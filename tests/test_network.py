@@ -1,4 +1,5 @@
 """End to end: tasks go through miners, a lazy miner gets caught, the books balance."""
+import hashlib
 import inspect
 import os
 import random
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "orchestrator_p
 
 from app import Shape  # noqa: E402
 from network import ComputeNetwork  # noqa: E402
+from network.compute_network import audit_draw  # noqa: E402
 from worker_runner import WORKER_PATH  # noqa: E402
 
 
@@ -59,6 +61,23 @@ class NetworkTest(unittest.TestCase):
         net.evaluate_batch(second, gen=1)
         self.assertTrue(all(s.miner.honest for s in second))
         net.ledger.close()
+
+    def test_audit_seed_is_fresh_and_committed(self):
+        a = self.make_network()
+        b = ComputeNetwork(n_miners=3, n_cheaters=1, log_dir=os.path.join(self.tmp.name, "b"), verbose=False)
+        self.assertNotEqual(a.audit_seed, b.audit_seed)
+        self.assertEqual(a.audit_commitment, hashlib.sha256(a.audit_seed.encode()).hexdigest())
+        a.ledger.close()
+        b.ledger.close()
+
+
+class AuditSampleTest(unittest.TestCase):
+    def test_sample_follows_the_seed(self):
+        tasks = [f"g0-t{i:04d}" for i in range(4000)]
+        picked = [audit_draw("seed-a", t) < 0.2 for t in tasks]
+        self.assertEqual(picked, [audit_draw("seed-a", t) < 0.2 for t in tasks])     # replayable
+        self.assertNotEqual(picked, [audit_draw("seed-b", t) < 0.2 for t in tasks])  # another seed, another sample
+        self.assertAlmostEqual(sum(picked) / len(tasks), 0.2, delta=0.02)
 
 
 class EconomicsTest(unittest.TestCase):
