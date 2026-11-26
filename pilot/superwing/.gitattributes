@@ -1,0 +1,2 @@
+# Vendored files are pinned by sha256: never convert their line endings
+vendor/** -text
