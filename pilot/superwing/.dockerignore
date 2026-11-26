@@ -1,0 +1,4 @@
+cases/
+runs/
+__pycache__/
+*.md
