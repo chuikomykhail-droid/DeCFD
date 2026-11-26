@@ -50,9 +50,10 @@ def wing_params(row):
     Layout: SA DA DA_kink AR TR kink rootadj | rtcs(3) cambers(3) twists(4) |
     cst_u(10) cst_l(10) | tcroot | M3(8) | AA(8).
 
-    `rootadj` comes from configs.dat on purpose. running.jsonl repeats the shape
-    vector with a different rootadj (the sampled design value). The published surface
-    geometry matches the configs.dat value (see pilot/README.md).
+    `rootadj` comes from configs.dat, not from running.jsonl, which repeats the shape
+    vector with the sampled design value. configs.dat is close to the geometry the
+    cluster used but not exact; `build_case(..., rootadj=...)` takes a fitted value
+    (see pilot/README.md).
     """
     if len(row) != ROW_LEN:
         raise ValueError(f"configs row has {len(row)} values, expected {ROW_LEN}")
@@ -106,11 +107,21 @@ def reference_from_running(rec, params):
     return {"shape": rec["running_id"], "mesh": rec.get("mesh"), "conditions": conditions}
 
 
-def build_case(configs_path, shape, out_dir, running_path=None):
+def build_case(configs_path, shape, out_dir, running_path=None, rootadj=None):
+    """`rootadj` overrides the configs.dat value, e.g. one fitted to the published surface.
+
+    configs.dat only approximates the root geometry the cluster used: for shape 0 its
+    value (0.29587) gives a root chord 0.26% too long, and 0.290407 reproduces the
+    published inner wing to 5e-8 (see pilot/README.md). The configs.dat value is kept
+    in input.json as `rootadj_configs`.
+    """
     rows = read_configs(configs_path)
     if not 0 <= shape < len(rows):
         raise IndexError(f"shape {shape} is not in {configs_path} ({len(rows)} rows)")
     params = wing_params(rows[shape])
+    if rootadj is not None:
+        params["rootadj_configs"] = params["rootadj"]
+        params["rootadj"] = rootadj
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "input.json"), "w") as f:
         json.dump(params, f, indent=1)
@@ -131,8 +142,9 @@ def main():
     ap.add_argument("--running", help="SuperWing running.jsonl, for reference.json")
     ap.add_argument("--shape", type=int, required=True, help="row index in configs.dat")
     ap.add_argument("--out", required=True, help="case directory to write")
+    ap.add_argument("--rootadj", type=float, help="override rootadj (fitted to the published surface)")
     args = ap.parse_args()
-    params, reference = build_case(args.configs, args.shape, args.out, args.running)
+    params, reference = build_case(args.configs, args.shape, args.out, args.running, args.rootadj)
     print(f"shape {args.shape}: AR {params['AR']:.3f}, sweep {params['SA']:.2f} deg, "
           f"{N_COND} conditions -> {args.out}")
     if reference:

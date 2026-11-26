@@ -38,7 +38,20 @@ Checked against the published surface coordinates of shape 0:
 
 The published surface is stored at cell centres: its innermost station is half a cell outboard of the root. The predicted chords are taken at that same station.
 
-**Use `configs.dat` values with the final `gen-mesh.superwing.py`.** `running_info.shape` holds the sampled design value, not the one used for the geometry. This rests on one shape. Repeat the check on every pilot shape before computing it.
+`running_info.shape` holds the sampled design value, not the one used for the geometry. `configs.dat` is close, but it is not exact either.
+
+**Full surface check (shape 0).** We built the surface mesh with `gen-mesh.superwing.py` from `configs.dat` and compared all 44,096 cell centres with the published surface:
+
+| Part of the wing | Largest gap to the published surface (chord = 1) |
+|---|---|
+| Kink to tip (29,760 cells) | 1.5e-7: identical |
+| Root to kink, `rootadj` from `configs.dat` (0.295870) | 2.8e-3: root chord 0.26% too long; leading edge identical |
+| Root to kink, `rootadj` fitted by least squares (0.290407) | **5.4e-8: identical** |
+| Tip cap (span 3.116–3.126) | 1.1e-3 with either value; not explained yet |
+
+So `configs.dat` only approximates the root geometry the cluster used. The fitted value reproduces it exactly. The ratio of the fitted value to the sampled one is 0.545 for this shape; we found no formula for it yet. Each pilot shape therefore gets its `rootadj` fitted to the published surface (`build_case.py --rootadj`). The published geometry of any shape can be read from the dataset's `origingeom.npy` with an HTTP range request (about 0.8 MB per shape).
+
+The cap at the very tip is the one part that still differs. It is about 0.3% of the span, so its effect on the forces should be small. The comparison will show it.
 
 ## Files
 

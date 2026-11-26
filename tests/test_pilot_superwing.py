@@ -68,6 +68,11 @@ class BuildCaseTest(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "case", "input.json")) as f:
             self.assertEqual(json.load(f)["rootadj"], 0.3)
 
+    def test_fitted_rootadj_overrides_configs(self):
+        params, _ = build_case(self.configs, 0, os.path.join(self.tmp.name, "case"), rootadj=0.29)
+        self.assertEqual(params["rootadj"], 0.29)
+        self.assertEqual(params["rootadj_configs"], 0.3)
+
     def test_mismatched_conditions_are_rejected(self):
         with open(self.running, "w") as f:
             f.write(json.dumps(run_record(0, aa_shift=0.5)) + "\n")
