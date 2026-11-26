@@ -37,6 +37,7 @@ orchestrator_py/network_logs/
 orchestrator_py/results/
 orchestrator_py/old/
 validation/runs/
+pilot/superwing/runs/
 
 # Python
 __pycache__/
