@@ -49,3 +49,6 @@ venv/
 .keys/
 solana/**/target/
 solana/**/Cargo.lock
+
+# miner node logs
+network_logs/
