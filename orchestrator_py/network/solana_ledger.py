@@ -240,13 +240,15 @@ class SolanaLedger(Ledger):
             except RpcError as e:
                 if "not confirmed" not in str(e):
                     raise LedgerError(str(e)) from e
-            statuses = self.rpc.statuses([p["sig"] for p in pending])
+            # A transaction sent long ago (the coordinator waited hours for a miner) is no longer in
+            # the recent-status cache: search the history before taking it for dropped
+            statuses = self.rpc.statuses([p["sig"] for p in pending], history=True)
             pending = [p for p, st in zip(pending, statuses)
                        if not (st and st.get("confirmationStatus") in ("confirmed", "finalized"))]
             for p in pending:
                 while self.rpc.call("isBlockhashValid", [str(p["bh"]), {"commitment": "confirmed"}])["value"]:
                     time.sleep(3)
-                if self.rpc.statuses([p["sig"]])[0]:   # it landed while the blockhash was still valid
+                if self.rpc.statuses([p["sig"]], history=True)[0]:   # it landed while the blockhash was valid
                     continue
                 print(f"  (devnet dropped transaction {p['sig'][:12]}..., sending it again)")
                 self._submit(p, fresh=True)

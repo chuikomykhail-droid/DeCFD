@@ -36,7 +36,7 @@ class FakeRpc:
             self.landed.add(sig)
         return sig
 
-    def statuses(self, sigs):
+    def statuses(self, sigs, history=False):
         return [{"confirmationStatus": "confirmed", "err": None} if s in self.landed else None for s in sigs]
 
     def wait(self, sigs, timeout=90):

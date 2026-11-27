@@ -83,11 +83,13 @@ class RpcClient:
         return self.call("sendTransaction", [base64.b64encode(tx_bytes).decode(),
                                              {"encoding": "base64", "preflightCommitment": "confirmed"}])
 
-    def statuses(self, signatures):
+    def statuses(self, signatures, history=False):
+        """Status per signature, or None. Without `history` only the recent-status cache (about a
+        minute of slots) is searched: an older, landed transaction then looks unknown."""
         out = []
         for i in range(0, len(signatures), 256):
             chunk = signatures[i:i + 256]
-            out += self.call("getSignatureStatuses", [chunk, {"searchTransactionHistory": False}])["value"]
+            out += self.call("getSignatureStatuses", [chunk, {"searchTransactionHistory": history}])["value"]
         return out
 
     def account(self, pubkey):

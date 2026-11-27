@@ -122,6 +122,9 @@ def run_job(ledger, case_dir, conditions, options, local=1, lazy=0, remote=0, ru
     ledger.initialize(client, verifier.pubkey, min_stake, int(slash * 10_000), int(verifier_share * 10_000))
     ledger.airdrop(client.pubkey, client_funds)
     ledger.airdrop(verifier.pubkey, 0)
+    # Confirm now: waiting for miner nodes takes minutes, and by then the RPC's recent-status cache
+    # no longer knows these signatures, so a late check would take them for dropped and resend them
+    getattr(ledger, "_sync", lambda: None)()
     print(f"Network on {ledger.cluster}; audit seed commitment {commitment[:16]}..")
 
     miners = []
@@ -284,7 +287,8 @@ def main():
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)
 
-    log_dir = os.path.join(ROOT, "network_logs", f"superwing-{time.strftime('%Y%m%d-%H%M%S')}")
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "network_logs",
+                           f"superwing-{time.strftime('%Y%m%d-%H%M%S')}")
     os.makedirs(log_dir, exist_ok=True)
     opts = {"challenge_window": args.window} if args.ledger == "devnet" else {}
     ledger = create_ledger(args.ledger, log_dir=log_dir, **opts)
