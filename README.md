@@ -34,6 +34,7 @@ strangers. DeCFD makes a fake result cost more than it earns:
 | Remote miner node: finds its tasks on chain, signs its own results | ✅ packaged for Windows machines without Python |
 | In-memory mock of the program, behind the same `Ledger` interface | ✅ for tests and offline runs |
 | Dashboard (live and replay), run report, tests | ✅ |
+| Real RANS CFD tasks: TU Munich SuperWing wings, ADflow in Docker, tolerance audits | ✅ on devnet, see [below](#real-rans-cfd-tu-munich-wings-on-the-network) |
 
 ## Demo run: Solana devnet, four laptops
 
@@ -69,6 +70,63 @@ the starting vortex leaving the trailing edge.
 
 ![The flow starting around the final shape](docs/demo/data/run/report/startup.gif)
 
+
+## Real RANS CFD: TU Munich wings on the network
+
+The lattice-Boltzmann solver above is a teaching-scale model. To show the network can carry
+the CFD that engineers actually run, we took [SuperWing](https://huggingface.co/datasets/yunplus/SuperWing),
+a public dataset of 3D transonic wings from the Thuerey group at TU Munich, and recomputed it
+with the group's own pipeline ([AeroTransformer](https://github.com/tum-pbs/AeroTransformer)):
+a pyHyp mesh of 3.5 million cells and an ADflow RANS solve, in the MDO Lab Docker image.
+
+**On one 16 GB laptop, every flight condition of shape 0 matches the cluster.** **[See the
+comparison](https://chuikomykhail-droid.github.io/DeCFD/superwing/)**.
+
+| | |
+|---|---|
+| Conditions within tolerance | 8 of 8 (Mach 0.75–0.77, angle of attack 2.3–9.4°) |
+| Largest lift difference | 0.00013 (tolerance 0.001) |
+| Largest drag difference | 0.30 counts (tolerance 1 count) |
+| Cost | 17 hours on a Ryzen 5 6600H, 5.9 GB peak |
+
+Two things had to be found first ([pilot/README.md](pilot/README.md)):
+
+- **Geometry.** The dataset's `configs.dat` gives the root geometry only approximately. A root
+  adjustment fitted to the published surface reproduces it to 5×10⁻⁸.
+- **Reference area.** The cluster divided forces by a planform area 3.49% larger than the
+  published geometry's. All three coefficients carried the same factor; the forces agree. This
+  is worth reporting to the authors once a second wing confirms it.
+
+**As network tasks.** A SuperWing job pins the container recipe (the base image by digest, the
+TU Munich scripts, our runner), the way an LBM job pins `worker.exe`. Each task carries the
+wing, the flight condition and the solver settings, and a hash over the case file. A RANS
+solve on MPI does not repeat bit for bit, so audits use a tolerance: the verifier re-computes
+the task and accepts lift within 0.001 and drag within 1 count. On chain it then confirms the
+miner's commitment, or submits its own and slashes the miner. The deployed program needed no
+change.
+
+```powershell
+docker build -t decfd-superwing pilot/superwing           # in WSL/Linux, once
+python orchestrator_py/superwing_job.py --case pilot/superwing/cases/shape0000 --conditions 1,3,5 `
+    --ledger devnet --remote 2                             # client and verifier
+python orchestrator_py/miner_node.py --name a --superwing  # each miner node
+```
+
+`--ledger mock --local 2 --lazy 1` runs the same job in one process, with no chain, one honest
+miner and one that fakes its results.
+
+### Built during Dev3pack (27–29 November 2026)
+
+Everything above this section existed before the hackathon: the network, the Solana program,
+the four-laptop devnet run and the dashboard. During the hackathon we built:
+
+- the SuperWing pilot: the case builder, the container, the runner, the comparison, and the
+  runs. We had studied the dataset the week before; the pilot code was committed from the
+  night of 26–27 November;
+- SuperWing tasks on the network: the pipeline and task hashes, tolerance audits, the miner
+  node's container mode, `superwing_job.py`;
+- a devnet fix for jobs that run for hours (a landed transaction was taken for dropped);
+- the [comparison page](https://chuikomykhail-droid.github.io/DeCFD/superwing/).
 
 ## Is the solver right?
 
@@ -182,6 +240,7 @@ event-log format are in [architecture.md](architecture.md).
 
 - **Physics.** 2D, laminar, Reynolds number ≈ 180: the regime of insects and micro-drones, not of aircraft. Shapes are "optimal for this model", not real wings.
 - **Objective.** Maximizing lift/drag in 2D ignores induced drag. The network does not care what the fitness function is, so a client could ask for minimum drag at a fixed lift instead.
+- **RANS tasks.** A SuperWing condition takes about 1.5–2 hours on a 6-core laptop and needs about 6 GB; the authors' faster Newton-Krylov solver needs more than 16 GB. Case files travel with the repository and the image is built from the pinned recipe; a production network would fetch both by content hash.
 - **Network.** The program runs on devnet only, and there is a single trusted verifier. Bit-exact verification needs every miner to run the same binary; the job pins its hash, and nodes check their CPU with a self-test. Task accounts are not closed after payment, so their rent is not reclaimed yet.
 
 ## Repository layout
@@ -193,6 +252,8 @@ orchestrator_py/app.py       genetic algorithm (the network's client)
 orchestrator_py/network/     Ledger interface, devnet client, mock program, wallets, miners, ComputeNetwork
 orchestrator_py/miner_node.py      remote miner node; package_miner.py builds it for Windows
 orchestrator_py/devnet.py    devnet setup, status and funding
+orchestrator_py/superwing_job.py, superwing_tasks.py   SuperWing (RANS) jobs: tasks, tolerance audits
+pilot/superwing/             SuperWing pilot: TU Munich scripts, container, case builder, comparison
 orchestrator_py/report.py    run report; serve.py / export_demo.py for the dashboard
 solana/                      Anchor program (programs/decfd), deployment notes
 dashboard/                   web dashboard (HTML/JS, no build step)
