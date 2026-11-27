@@ -126,6 +126,13 @@ The final result agrees with the cluster to 1e-5 in CL and 0.07 counts in drag. 
 
 The other conditions run with a 2,000-cycle cap instead of the authors' 3,000 to save time. Any condition still moving at that point continues from ADflow's volume solution.
 
+**Shape 0, all conditions** (DADI, 12 MPI processes; ours on the cluster's reference area):
+
+| Condition | Mach | AoA | CL ours | CL cluster | ΔCL | CD ours | CD cluster | ΔCD, counts | Cycles | Time |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 0.752 | 9.37 | 0.46850 | 0.46849 | +0.00001 | 0.017863 | 0.017856 | +0.07 | 3,000 | 2 h 47 min |
+| 1 | 0.756 | 5.47 | 0.06840 | 0.06841 | −0.000005 | 0.010394 | 0.010386 | +0.07 | 2,000 | 1 h 56 min |
+
 ## Open questions
 
 - Condition 0 matches with DADI. Do the low-angle conditions with negative lift (2, 4, 6) converge as well? On the cluster they had the largest CL fluctuation.
