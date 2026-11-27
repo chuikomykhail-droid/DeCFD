@@ -86,8 +86,24 @@ python -m unittest tests.test_pilot_superwing
    - Later, cheaper audits by restart: load the submitted solution, run about 5% of the cycles, and check that residuals stay down and CL/CD stay put. ADflow supports restart files.
 4. **Pilot run.** A few shapes, about 7 conditions each, on the four laptops. Then a report: agreement with the cluster, time, cost per case, and caught or failed cases.
 
+## Measured so far (shape 0)
+
+Laptop: Ryzen 5 6600H (6 cores / 12 threads), 16 GB RAM, WSL2 limited to 11 GB. Image: MDO Lab `u22-gcc-ompi-stable` pinned by digest.
+
+| Stage | Result |
+|---|---|
+| Mesh: CST surface plus pyHyp volume, 3.53M cells, 6 MPI processes | 15.5 min. First-cell height equals the cluster's (1.32e-6). Minimum cell quality 0.058, the cluster's −0.260: probably a different pyHyp version, since the surface is identical. |
+| ADflow, the cluster's settings (ANK, ILU(2), 40 Krylov vectors) | **Out of memory** when the ANK preconditioner is built on the fine grid |
+| ANK, lean (ILU(0), 10 Krylov vectors, no ASM overlap, thin-layer viscous preconditioner) | Still out of memory, at 10.3 GiB |
+| Multigrid DADI only (no ANK) | 4.55 GiB peak. 3.1 s per fine-grid 3w cycle on 12 MPI processes, 7.5 s on 6. |
+
+**What this means for miners.** With the authors' solver, a 3.5M-cell SuperWing case needs well over 16 GB of RAM. A 16 GB machine can run it only with the DADI smoother, which needs far more cycles. For the network this is a hard requirement per task type: a task has to state its minimum RAM, and a miner gets only the tasks it can hold.
+
+DADI convergence on condition 0: residual down one order in 400 fine-grid cycles; CL 0.490 vs. the cluster's 0.4685 at that point. The full 3000-cycle run is in progress. If the solution is still moving at the end, the run continues from ADflow's restart file.
+
 ## Open questions
 
-- RAM and time of one case on a 4-core laptop. Step 1 answers this.
+- Does DADI reach the cluster's CL and CD within tolerance, and after how many cycles?
 - Result size per case. Surface output is small, but the volume solution needed for restart audits is hundreds of MB.
-- Which MDO Lab image tag the authors used. Pin one and note it in the report.
+- Which MDO Lab image tag the authors used. We pinned one; ask the authors.
+- The tip cap geometry (1.1e-3 off) and the mesh quality gap: pyHyp version or the tip template?
