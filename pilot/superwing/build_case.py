@@ -17,13 +17,45 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 
 SCALARS = ["SA", "DA", "DA_kink", "AR", "TR", "kink", "rootadj"]
 VECTORS = [("rtcs", 3), ("cambers", 3), ("twists", 4), ("cst_u", 10), ("cst_l", 10)]
 N_COND = 8
-ROW_LEN = len(SCALARS) + sum(n for _, n in VECTORS) + 1 + 2 * N_COND   # + tcroot + M3 + AA = 54
+SHAPE_LEN = len(SCALARS) + sum(n for _, n in VECTORS) + 1               # + tcroot = 38
+ROW_LEN = SHAPE_LEN + 2 * N_COND                                          # + M3 + AA = 54
+ROOTADJ = SCALARS.index("rootadj")
 COND_TOL = 1e-6   # configs.dat and running.jsonl must agree on every flight condition
+CABIN_RATIO = 0.1  # gen-mesh.superwing.py: the wing starts at 10% of the half span
+
+
+def shape_vector(params):
+    """The 38 wing parameters in configs.dat order (what running.jsonl calls `shape`)."""
+    vec = [params[k] for k in SCALARS]
+    for key, _ in VECTORS:
+        vec += params[key]
+    return vec + [params["tcroot"]]
+
+
+def planform_area(params, rootadj):
+    """The reference area that gen-mesh.superwing.py computes as `surface_area`.
+
+    run-adflow.py divides forces by it. It is the trapezoid from 10% span to the kink
+    plus the trapezoid from the kink to the tip, with chord 1 at the root and `rootadj`
+    lengthening the inner chords. Same formula as the vendored script.
+    """
+    half_span = params["AR"] * (1 + params["TR"]) / 4
+    kink = half_span * params["kink"]
+    cabin = half_span * CABIN_RATIO
+    x_le_kink = math.tan(params["SA"] / 180 * math.pi) * kink
+    chord_tip = params["TR"]
+    chord_kink = params["TR"] * params["kink"] + (1 - params["kink"])
+    root_adj_l = rootadj * (x_le_kink + chord_kink - 1)
+    chord_cabin = (params["TR"] * CABIN_RATIO + (1 - CABIN_RATIO)
+                   + root_adj_l * (params["kink"] - CABIN_RATIO) / params["kink"])
+    return ((chord_cabin + chord_kink) * (kink - cabin) * 0.5
+            + (chord_kink + chord_tip) * (half_span - kink) * 0.5)
 
 
 def read_configs(path):
@@ -88,7 +120,20 @@ def read_running(path, shape):
 
 
 def reference_from_running(rec, params):
-    """The cluster's results per condition, checked against the conditions in configs.dat."""
+    """The cluster's results per condition, checked against the conditions in configs.dat.
+
+    `area_ref` is the area the cluster divided forces by. It follows the formula of
+    gen-mesh.superwing.py with the `rootadj` of the run log's shape vector (the sampled
+    value), not with the one that reproduces the published geometry: for shape 0 our
+    CL and CMz at that area agree with the cluster's to 3e-5, at our own area they are
+    3.5% higher (see pilot/README.md).
+    """
+    shape = rec.get("shape")
+    if shape is None or len(shape) != SHAPE_LEN:
+        raise ValueError(f"running.jsonl shape vector has {len(shape or [])} values, expected {SHAPE_LEN}")
+    for i, (ours, theirs) in enumerate(zip(shape_vector(params), shape)):
+        if i != ROOTADJ and abs(ours - theirs) > COND_TOL:
+            raise ValueError(f"wing parameter {i}: running.jsonl has {theirs}, configs.dat has {ours}")
     conditions = []
     for ic in range(N_COND):
         info = rec.get(f"{ic}_running_info")
@@ -104,7 +149,9 @@ def reference_from_running(rec, params):
             "re": wc.get("re"), "CL": res["wing_cl"], "CD": res["wing_cd"], "CMz": res.get("wing_cmz"),
             "err_cl": res.get("err_cl"), "err_cd": res.get("err_cd"), "n_step": res.get("n_step"),
         })
-    return {"shape": rec["running_id"], "mesh": rec.get("mesh"), "conditions": conditions}
+    return {"shape": rec["running_id"], "mesh": rec.get("mesh"),
+            "area_ref": planform_area(params, shape[ROOTADJ]), "area_ref_rootadj": shape[ROOTADJ],
+            "conditions": conditions}
 
 
 def build_case(configs_path, shape, out_dir, running_path=None, rootadj=None):

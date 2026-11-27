@@ -8,6 +8,10 @@ A converged RANS solution should not depend on how the mesh was split across MPI
 processes beyond the solver tolerance. A larger gap points at a different geometry,
 mesh or solver version. Drag is reported in counts (1 count = 0.0001).
 
+Our coefficients are first put on the cluster's reference area. The cluster divided
+forces by an area computed with a different `rootadj` from the geometry's (see
+build_case.reference_from_running); the forces themselves are what is compared.
+
 Usage:
   python compare.py cases/shape0000 [--cl-tol 1e-3] [--cd-tol 1e-4]
 """
@@ -16,19 +20,28 @@ import json
 import os
 import sys
 
+from build_case import planform_area
 
-def compare(result, reference, cl_tol, cd_tol):
-    """One row per condition computed by us; `ok` is None when there is nothing to compare."""
+
+def compare(result, reference, cl_tol, cd_tol, area=None):
+    """One row per condition computed by us; `ok` is None when there is nothing to compare.
+
+    `area` is the reference area of our run. Our CL and CD are multiplied by
+    area / reference["area_ref"] when both are known; CL_raw and CD_raw keep ours.
+    """
     ref = {c["ic"]: c for c in reference["conditions"]}
+    scale = area / reference["area_ref"] if area and reference.get("area_ref") else 1.0
     rows = []
     for ours in result.get("conditions", []):
         theirs = ref.get(ours["ic"], {})
         row = {"ic": ours["ic"], "M3": ours["M3"], "AA": ours["AA"], "state": ours["state"],
                "ref_state": theirs.get("state"), "seconds": ours.get("seconds"),
-               "n_step": ours.get("n_step"), "ref_n_step": theirs.get("n_step"), "ok": None}
+               "n_step": ours.get("n_step"), "ref_n_step": theirs.get("n_step"), "ok": None,
+               "scale": scale}
         if "CL" in ours and "CL" in theirs:
-            row.update(CL=ours["CL"], ref_CL=theirs["CL"], dCL=ours["CL"] - theirs["CL"],
-                       CD=ours["CD"], ref_CD=theirs["CD"], dCD=ours["CD"] - theirs["CD"])
+            cl, cd = ours["CL"] * scale, ours["CD"] * scale
+            row.update(CL=cl, CL_raw=ours["CL"], ref_CL=theirs["CL"], dCL=cl - theirs["CL"],
+                       CD=cd, CD_raw=ours["CD"], ref_CD=theirs["CD"], dCD=cd - theirs["CD"])
             row["ok"] = (ours["state"] == "converged" and abs(row["dCL"]) <= cl_tol
                          and abs(row["dCD"]) <= cd_tol)
         elif ours["state"] != "converged":
@@ -48,7 +61,16 @@ def main():
         result = json.load(f)
     with open(os.path.join(args.case, "reference.json")) as f:
         reference = json.load(f)
-    rows = compare(result, reference, args.cl_tol, args.cd_tol)
+    with open(os.path.join(args.case, "input.json")) as f:
+        params = json.load(f)
+    # gen-mesh writes surface_area into input.json; a case that was not meshed yet has none
+    area = params.get("surface_area") or planform_area(params, params["rootadj"])
+    rows = compare(result, reference, args.cl_tol, args.cd_tol, area)
+
+    if reference.get("area_ref"):
+        print(f"reference area: ours {area:.6f} (rootadj {params['rootadj']}), cluster "
+              f"{reference['area_ref']:.6f} (rootadj {reference['area_ref_rootadj']}); "
+              f"our CL and CD x {area / reference['area_ref']:.6f}")
 
     mesh = result.get("mesh", {})
     if mesh.get("state") == "ok":

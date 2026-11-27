@@ -53,13 +53,26 @@ So `configs.dat` only approximates the root geometry the cluster used. The fitte
 
 The cap at the very tip is the one part that still differs. It is about 0.3% of the span, so its effect on the forces should be small. The comparison will show it.
 
+**Reference area.** `run-adflow.py` divides forces by `surface_area`, which `gen-mesh.superwing.py` computes from the planform, `rootadj` included. The cluster's coefficients fit an area computed with the *sampled* `rootadj` (0.533, from `running_info.shape`), while the geometry corresponds to the fitted 0.290. For shape 0 that area is 3.49% larger than the one our run uses.
+
+Evidence, from condition 0 after 1,538 DADI cycles:
+
+| | CL | CMz | CD |
+|---|---|---|---|
+| Ours / cluster's | 1.0349 | 1.0350 | 1.0380 (still converging) |
+| Area with sampled `rootadj` / area with fitted `rootadj` | 1.0349 | 1.0349 | 1.0349 |
+
+All three coefficients carry the same factor, and that factor is exactly the area ratio. So the forces agree, and only the normalisation differs. `build_case.py` records the cluster's area in `reference.json` (`area_ref`), and `compare.py` puts our coefficients on it before comparing.
+
+The ratio depends on each shape's two `rootadj` values. So the published CL and CD carry a per-shape scale offset of a few percent relative to the geometry's own reference area. That is worth telling the authors once a second shape confirms it.
+
 ## Files
 
 | Path | What |
 |---|---|
 | `superwing/vendor/` | The TU Munich scripts, byte for byte, with hashes (`NOTICE.md`) |
 | `superwing/build_case.py` | SuperWing row → `input.json` plus `reference.json` (the cluster's results) |
-| `superwing/compare.py` | Our results vs. the cluster: CL, drag in counts, steps, time, verdict |
+| `superwing/compare.py` | Our results vs. the cluster on the cluster's reference area: CL, drag in counts, steps, time, verdict |
 | `superwing/cases/` | Prepared cases (data CC BY-SA 4.0, see the README there) |
 | `../tests/test_pilot_superwing.py` | Parsing and comparison tests |
 
@@ -99,11 +112,21 @@ Laptop: Ryzen 5 6600H (6 cores / 12 threads), 16 GB RAM, WSL2 limited to 11 GB. 
 
 **What this means for miners.** With the authors' solver, a 3.5M-cell SuperWing case needs well over 16 GB of RAM. A 16 GB machine can run it only with the DADI smoother, which needs far more cycles. For the network this is a hard requirement per task type: a task has to state its minimum RAM, and a miner gets only the tasks it can hold.
 
-DADI convergence on condition 0: residual down one order in 400 fine-grid cycles; CL 0.490 vs. the cluster's 0.4685 at that point. The full 3000-cycle run is in progress. If the solution is still moving at the end, the run continues from ADflow's restart file.
+**DADI convergence on condition 0** (M = 0.752, AoA = 9.37°; cluster CL 0.46849, CD 0.017856). Our coefficients are shown on the cluster's reference area, 12 MPI processes, about 3.1 s per cycle:
+
+| Fine-grid cycles | Density residual | CL | ΔCL | CD | ΔCD, counts |
+|---|---|---|---|---|---|
+| 400 | 13.9 | 0.47346 | +0.0050 | 0.018513 | +6.6 |
+| 1,000 | 4.1 | 0.46923 | +0.0007 | 0.017935 | +0.8 |
+| 1,500 | 1.3 | 0.46831 | −0.0002 | 0.017914 | +0.6 |
+| 1,538 | 1.2 | 0.46848 | −0.00001 | 0.017908 | +0.5 |
+
+Within tolerance (CL 1e-3, CD 1 count) from about 1,000 cycles, which is about 55 minutes on this laptop. The other conditions run with a 2,000-cycle cap instead of the authors' 3,000 to save time. Any condition still moving at that point continues from ADflow's volume solution.
 
 ## Open questions
 
-- Does DADI reach the cluster's CL and CD within tolerance, and after how many cycles?
+- Condition 0 matches with DADI. Do the low-angle conditions with negative lift (2, 4, 6) converge as well? On the cluster they had the largest CL fluctuation.
+- The reference-area offset: confirm it on a second shape, then report it to the authors.
 - Result size per case. Surface output is small, but the volume solution needed for restart audits is hundreds of MB.
 - Which MDO Lab image tag the authors used. We pinned one; ask the authors.
 - The tip cap geometry (1.1e-3 off) and the mesh quality gap: pyHyp version or the tip template?
