@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SuperWing on DeCFD</title>
+<meta name="description" content="TU Munich SuperWing wings recomputed with the authors' RANS pipeline on a laptop and on the DeCFD Solana compute network, checked against the published cluster results.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3ef; --surface: #fcfcfb; --surface-2: #f0efec; --border: #e2e1dc;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #75746f;
+  --series: #2a78d6; --band: #e7e6e1; --zero: #a9a8a2; --grid: #e5e4df;
+  --good: #0f7a2e; --good-bg: #e3f3e7; --bad: #c93a39; --bad-bg: #fbe9e8;
+  --link: #1c5cab;
+  --font: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --mono: ui-monospace, Consolas, "SF Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --border: #2f2f2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #9a998f;
+    --series: #3987e5; --band: #2a2a28; --zero: #5f5e58; --grid: #2b2b29;
+    --good: #4cbb6c; --good-bg: #1d3324; --bad: #e66767; --bad-bg: #3a1f1f;
+    --link: #86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --border: #2f2f2c;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #9a998f;
+  --series: #3987e5; --band: #2a2a28; --zero: #5f5e58; --grid: #2b2b29;
+  --good: #4cbb6c; --good-bg: #1d3324; --bad: #e66767; --bad-bg: #3a1f1f;
+  --link: #86b6ef;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 var(--font); }
+a { color: var(--link); }
+.page { max-width: 1040px; margin: 0 auto; padding: 40px 16px 64px; }
+.kicker { color: var(--text-2); font-size: 14px; letter-spacing: .02em; margin: 0 0 8px; }
+h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.15; margin: 0 0 16px; font-weight: 650; }
+h2 { font-size: 24px; line-height: 1.25; margin: 0 0 8px; font-weight: 650; }
+h3 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+.lede { font-size: 18px; color: var(--text-2); max-width: 760px; margin: 0; }
+section { margin-top: 48px; }
+.sub { color: var(--text-2); max-width: 760px; margin: 0 0 20px; }
+.num, td.num, .mono { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 32px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.tile .v { font-size: 30px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--text-2); font-size: 14px; margin-top: 6px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.chart-title { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.chart-note { color: var(--text-2); font-size: 13px; margin: 0 0 8px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: var(--font); fill: var(--text-2); font-size: 12px; }
+.multiples { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.multiples .card { padding: 12px; }
+.table-wrap { overflow-x: auto; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+th { color: var(--text-2); font-weight: 600; font-size: 13px; }
+td.num, th.num { text-align: right; }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 13px; }
+.badge.good { color: var(--good); background: var(--good-bg); }
+.badge.bad { color: var(--bad); background: var(--bad-bg); }
+.badge.plain { color: var(--text-2); background: var(--surface-2); }
+details summary { cursor: pointer; color: var(--text-2); font-size: 14px; }
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.steps p { margin: 0; color: var(--text-2); font-size: 15px; }
+.tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.4;
+  box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; font-variant-numeric: tabular-nums; max-width: 260px; }
+.tip b { font-weight: 600; }
+footer { margin-top: 56px; color: var(--text-2); font-size: 14px; border-top: 1px solid var(--border); padding-top: 16px; }
+.hidden { display: none; }
+@media (max-width: 860px) {
+  .tiles, .multiples { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pair, .steps { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <p class="kicker">DeCFD · decentralized CFD on Solana · built at Dev3pack, November 2026</p>
+    <h1>Industrial CFD on a Solana compute network, checked against TU Munich's cluster</h1>
+    <p class="lede">SuperWing is a public dataset of 3D transonic wings from the Thuerey group at TU Munich, computed on a
+      160-core cluster. We recomputed one of its wings with the group's own pipeline (pyHyp mesh, ADflow RANS, 3.5 million
+      cells) on a 16 GB laptop, and every flight condition came out as the cluster published it. The same computation now
+      runs as tasks on DeCFD: miners compute in a pinned container, a verifier re-runs a sample and checks it within a
+      tolerance, and a Solana program pays honest work and slashes fakes.</p>
+  </header>
+
+  <section class="tiles" id="tiles" aria-label="Key results"></section>
+
+  <section id="agreement">
+    <h2>Every condition matches the cluster</h2>
+    <p class="sub">Shape 0, all eight flight conditions: our lift and drag minus the cluster's. The shaded band is the
+      tolerance we set beforehand (lift ±0.001, drag ±1 count, where 1 count = 0.0001). Our coefficients are on the
+      cluster's reference area; see the finding below.</p>
+    <div class="pair">
+      <div class="card"><p class="chart-title">Lift: ours − cluster</p><p class="chart-note">Tolerance ±0.001</p><div id="dcl"></div></div>
+      <div class="card"><p class="chart-title">Drag: ours − cluster, in counts</p><p class="chart-note">Tolerance ±1 count</p><div id="dcd"></div></div>
+    </div>
+    <details style="margin-top:12px"><summary>All numbers</summary><div class="table-wrap" id="cond-table"></div></details>
+  </section>
+
+  <section id="convergence">
+    <h2>How the solution settles</h2>
+    <p class="sub">Lift minus the cluster's final value, per fine-grid solver cycle. On 16 GB the authors' Newton-Krylov
+      solver does not fit, so we ran the multigrid smoother; it needs more cycles but lands on the same answer. Each
+      curve enters the tolerance band after about 1,000 cycles, roughly 55 minutes on this laptop.</p>
+    <div class="multiples" id="multiples"></div>
+  </section>
+
+  <section id="network" class="hidden">
+    <h2>The same computation as tasks on the network</h2>
+    <p class="sub" id="network-sub"></p>
+    <div class="card"><div class="table-wrap" id="task-table" style="margin-top:0"></div></div>
+    <div class="card" style="margin-top:12px"><h3>Miners after the job</h3><div class="table-wrap" id="miner-table"></div></div>
+  </section>
+
+  <section id="area">
+    <h2>A finding for the dataset's authors</h2>
+    <p class="sub" id="area-text"></p>
+  </section>
+
+  <section id="how">
+    <h2>How the network checks a RANS result</h2>
+    <div class="steps">
+      <div class="card"><h3>The job pins the pipeline</h3><p>A job stores the hash of the container recipe: the MDO Lab
+        image pinned by digest, the TU Munich scripts and our runner. A node computes with exactly that, the way the
+        lattice-Boltzmann jobs pin their solver binary.</p></div>
+      <div class="card"><h3>The task pins the case</h3><p>Each task carries the wing, the flight condition and the solver
+        settings, plus a hash over the case file. A node rebuilds the hash from its own copy and refuses a case that
+        differs from the posted one.</p></div>
+      <div class="card"><h3>Audits use a tolerance</h3><p>An MPI solve does not repeat bit for bit, so the verifier
+        re-computes a sample and accepts lift and drag within ±0.001 and ±1 count. On chain it then confirms the
+        miner's commitment, or submits its own and the miner loses half its stake.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Data: <a href="https://huggingface.co/datasets/yunplus/SuperWing">SuperWing</a> (CC BY-SA 4.0) ·
+    pipeline: <a href="https://github.com/tum-pbs/AeroTransformer">tum-pbs/AeroTransformer</a> (Apache-2.0) ·
+    code: <a href="https://github.com/chuikomykhail-droid/DeCFD">github.com/chuikomykhail-droid/DeCFD</a> ·
+    <a href="../demo/">the earlier network demo with four laptops</a>
+  </footer>
+</main>
+<div class="tip" id="tip" role="status"></div>
+<script>
+(async function () {
+  const data = await (await fetch("data.json")).json();
+  const P = data.pilot, C = P.conditions;
+  const NS = "http://www.w3.org/2000/svg";
+  const tip = document.getElementById("tip");
+  const fmt = (v, d) => (v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+  const sgn = (v, d) => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(d);
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  function showTip(evt, html) {
+    tip.innerHTML = html; tip.style.display = "block";
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = evt.clientX + 14, y = evt.clientY + 14;
+    if (x + w > innerWidth - 8) x = evt.clientX - w - 14;
+    if (y + h > innerHeight - 8) y = evt.clientY - h - 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.display = "none"; };
+  const label = c => `${c.ic} · M ${c.M.toFixed(3)} · ${c.AoA.toFixed(1)}°`;
+
+  // ---- tiles
+  const maxCL = Math.max(...C.map(c => Math.abs(c.dCL)));
+  const maxCD = Math.max(...C.map(c => Math.abs(c.dCD))) * 1e4;
+  const hours = (P.mesh_minutes + C.reduce((s, c) => s + c.minutes, 0)) / 60;
+  const ok = C.filter(c => Math.abs(c.dCL) <= 1e-3 && Math.abs(c.dCD) <= 1e-4).length;
+  const tiles = [
+    [`${ok} / ${C.length}`, "flight conditions within tolerance of the cluster"],
+    [maxCL.toFixed(5), "largest lift difference (tolerance 0.001)"],
+    [maxCD.toFixed(2), "largest drag difference, counts (tolerance 1)"],
+    [`${hours.toFixed(0)} h`, `on one laptop, ${P.peak_memory_gib} GB peak, ${(P.cells / 1e6).toFixed(1)}M cells`],
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map(([v, l]) =>
+    `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+  // ---- dot plots: difference per condition against the tolerance band
+  function dotPlot(id, key, scale, tol, digits, unit) {
+    const W = 460, rowH = 30, top = 8, left = 132, right = 16, bottom = 30;
+    const H = top + rowH * C.length + bottom;
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": `${unit} difference per condition, all inside the tolerance band` });
+    const lim = tol * 1.25;
+    const x = v => left + (v + lim) / (2 * lim) * (W - left - right);
+    el("rect", { x: x(-tol), y: top, width: x(tol) - x(-tol), height: rowH * C.length, fill: "var(--band)", rx: 4 }, svg);
+    el("line", { x1: x(0), x2: x(0), y1: top, y2: top + rowH * C.length, stroke: "var(--zero)", "stroke-width": 1 }, svg);
+    [-tol, 0, tol].forEach(t => {
+      const tx = el("text", { x: x(t), y: H - 10, "text-anchor": "middle" }, svg);
+      tx.textContent = t === 0 ? "0" : sgn(t * scale, tol * scale >= 1 ? 0 : 3);
+    });
+    C.forEach((c, i) => {
+      const cy = top + rowH * i + rowH / 2, v = c[key];
+      const t = el("text", { x: left - 10, y: cy + 4, "text-anchor": "end" }, svg);
+      t.textContent = label(c);
+      el("line", { x1: x(-lim), x2: x(lim), y1: cy, y2: cy, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      el("circle", { cx: x(v), cy, r: 5, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+      const hit = el("rect", { x: left, y: cy - rowH / 2, width: W - left - right, height: rowH, fill: "transparent" }, svg);
+      const html = `<b>Condition ${c.ic}</b> · M ${c.M.toFixed(4)}, AoA ${c.AoA.toFixed(2)}°<br>` +
+        (key === "dCL" ? `Lift: ours ${fmt(c.CL, 5)}, cluster ${fmt(c.ref_CL, 5)}<br>Difference ${sgn(c.dCL, 5)}`
+                       : `Drag: ours ${c.CD.toFixed(6)}, cluster ${c.ref_CD.toFixed(6)}<br>Difference ${sgn(c.dCD * 1e4, 2)} counts`);
+      hit.addEventListener("pointermove", e => showTip(e, html));
+      hit.addEventListener("pointerleave", hideTip);
+    });
+    document.getElementById(id).appendChild(svg);
+  }
+  dotPlot("dcl", "dCL", 1, 1e-3, 5, "Lift");
+  dotPlot("dcd", "dCD", 1e4, 1e-4, 2, "Drag");
+
+  document.getElementById("cond-table").innerHTML = `<table><thead><tr><th>Condition</th><th class="num">Mach</th>
+    <th class="num">AoA, °</th><th class="num">Lift, ours</th><th class="num">Lift, cluster</th><th class="num">Drag, ours</th>
+    <th class="num">Drag, cluster</th><th class="num">Δ drag, counts</th><th class="num">Cycles</th><th class="num">Time, min</th></tr></thead><tbody>` +
+    C.map(c => `<tr><td>${c.ic}</td><td class="num">${c.M.toFixed(4)}</td><td class="num">${c.AoA.toFixed(2)}</td>
+      <td class="num">${fmt(c.CL, 5)}</td><td class="num">${fmt(c.ref_CL, 5)}</td><td class="num">${c.CD.toFixed(6)}</td>
+      <td class="num">${c.ref_CD.toFixed(6)}</td><td class="num">${sgn(c.dCD * 1e4, 2)}</td><td class="num">${c.cycles.toFixed(0)}</td>
+      <td class="num">${c.minutes.toFixed(0)}</td></tr>`).join("") + `</tbody></table>`;
+
+  // ---- small multiples: lift minus the cluster's value, per cycle
+  const maxCycle = Math.max(...C.map(c => c.history.length ? c.history[c.history.length - 1][0] : 0));
+  const YL = 0.01;
+  C.forEach((c, idx) => {
+    const W = 240, H = 150, l = 44, r = 8, t = 8, b = 24;
+    const card = document.createElement("div"); card.className = "card";
+    card.innerHTML = `<p class="chart-title">Condition ${c.ic}</p><p class="chart-note">M ${c.M.toFixed(3)}, AoA ${c.AoA.toFixed(2)}°</p>`;
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": `Condition ${c.ic}: lift converges to within ${fmt(c.dCL, 5)} of the cluster` });
+    const x = v => l + v / maxCycle * (W - l - r);
+    const y = v => t + (YL - Math.max(-YL, Math.min(YL, v))) / (2 * YL) * (H - t - b);
+    const clipId = "clip" + idx;
+    const defs = el("defs", {}, svg);
+    el("rect", { x: l, y: t, width: W - l - r, height: H - t - b }, el("clipPath", { id: clipId }, defs));
+    el("rect", { x: l, y: y(1e-3), width: W - l - r, height: y(-1e-3) - y(1e-3), fill: "var(--band)" }, svg);
+    el("line", { x1: l, x2: W - r, y1: y(0), y2: y(0), stroke: "var(--zero)", "stroke-width": 1 }, svg);
+    if (idx % 4 === 0 || innerWidth <= 860 && idx % 2 === 0) {
+      [YL, 0, -YL].forEach(v => {
+        const tx = el("text", { x: l - 6, y: y(v) + 4, "text-anchor": "end" }, svg);
+        tx.textContent = v === 0 ? "0" : sgn(v, 2);
+      });
+    }
+    [0, 1000, 2000, 3000].filter(v => v <= maxCycle + 1).forEach(v => {
+      const tx = el("text", { x: x(v), y: H - 6, "text-anchor": "middle" }, svg);
+      tx.textContent = v === 0 ? "0" : `${v / 1000}k`;
+    });
+    const pts = c.history.map(p => `${x(p[0]).toFixed(1)},${y(p[1] - c.ref_CL).toFixed(1)}`).join(" ");
+    el("polyline", { points: pts, fill: "none", stroke: "var(--series)", "stroke-width": 2, "stroke-linejoin": "round",
+      "clip-path": `url(#${clipId})` }, svg);
+    const cross = el("line", { y1: t, y2: H - b, stroke: "var(--text-2)", "stroke-width": 1, opacity: 0 }, svg);
+    const dot = el("circle", { r: 4, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
+    const hit = el("rect", { x: l, y: t, width: W - l - r, height: H - t - b, fill: "transparent" }, svg);
+    hit.addEventListener("pointermove", e => {
+      const box = svg.getBoundingClientRect();
+      const cyc = (e.clientX - box.left) / box.width * W;
+      const want = (cyc - l) / (W - l - r) * maxCycle;
+      let best = c.history[0];
+      for (const p of c.history) if (Math.abs(p[0] - want) < Math.abs(best[0] - want)) best = p;
+      cross.setAttribute("x1", x(best[0])); cross.setAttribute("x2", x(best[0])); cross.setAttribute("opacity", .5);
+      dot.setAttribute("cx", x(best[0])); dot.setAttribute("cy", y(best[1] - c.ref_CL)); dot.setAttribute("opacity", 1);
+      showTip(e, `<b>Condition ${c.ic}, cycle ${best[0]}</b><br>Lift ${fmt(best[1], 5)} (cluster ${fmt(c.ref_CL, 5)})<br>` +
+        `Difference ${sgn(best[1] - c.ref_CL, 5)}<br>Drag ${best[2].toFixed(6)} (cluster ${c.ref_CD.toFixed(6)})`);
+    });
+    hit.addEventListener("pointerleave", () => { hideTip(); cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); });
+    card.appendChild(svg);
+    document.getElementById("multiples").appendChild(card);
+  });
+
+  // ---- reference area finding
+  const pct = ((1 / P.scale - 1) * 100).toFixed(2);
+  document.getElementById("area-text").innerHTML =
+    `At first our lift, drag and pitching moment were all ${pct}% higher than the cluster's, by the same factor. ` +
+    `The forces agree; the normalisation does not. The cluster divided forces by a planform area computed with the ` +
+    `root adjustment <span class="mono">rootadj = ${P.rootadj_cluster_area}</span> (the sampled design value), while the ` +
+    `published geometry corresponds to <span class="mono">${P.rootadj_geometry}</span>, which we fitted to the published ` +
+    `surface (to 5×10⁻⁸; <span class="mono">configs.dat</span> says ${P.rootadj_configs.toFixed(4)}). With the cluster's ` +
+    `area, ${P.area_cluster.toFixed(4)} instead of ${P.area_ours.toFixed(4)}, everything matches. The offset differs from ` +
+    `wing to wing, so the dataset's lift and drag carry a per-shape scale of a few percent. We will confirm it on a second ` +
+    `wing before reporting it to the authors.`;
+
+  // ---- network job
+  if (data.network) {
+    const N = data.network, R = N.report, ev = N.events, ver = N.verifier || {};
+    const ex = (kind, id) => `https://explorer.solana.com/${kind}/${id}?cluster=${R.cluster}`;
+    const byTask = {};
+    ev.forEach(e => { if (e.task) (byTask[e.task] = byTask[e.task] || {})[e.ix] = e; });
+    const times = ev.filter(e => e.t && e.ix !== "initialize" && e.ix !== "register_miner").map(e => e.t);
+    const span = Math.max(...times) - Math.min(...times);
+    document.getElementById("network").classList.remove("hidden");
+    const nT = R.tasks.length, nM = Object.keys(R.miners).length;
+    const nA = R.tasks.filter(t => t.audited).length, caught = R.tasks.filter(t => t.audit_ok === false);
+    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+    document.getElementById("network-sub").innerHTML =
+      `${plural(nT, "condition")} of shape ${Number(R.case.replace("shape", ""))} posted as tasks on Solana ${R.cluster} ` +
+      `(<a href="${ex("address", R.config)}">network account</a>, program <a href="${ex("address", R.program_id)}">${R.program_id.slice(0, 8)}…</a>). ` +
+      `${plural(nM, "miner node")} computed them in the pinned container (recipe hash ` +
+      `<span class="mono">${R.pipeline_hash.slice(0, 12)}…</span>). The verifier re-computed ${plural(nA, "task")}, at least one ` +
+      `per miner, picked by a seed whose hash was published before the tasks (<span class="mono">${R.audit_commitment.slice(0, 12)}…</span>). ` +
+      (caught.length ? `One node was set up to be lazy: it submitted made-up numbers without computing. The audit caught it, ` +
+        `and the program moved half its stake to the verifier and the treasury. ` : "") +
+      `From the first task to the last payout took ${(span / 3600).toFixed(1)} h; ${R.paid} tokens were paid to miners and ${R.refund} ` +
+      `returned to the client.`;
+    const links = t => {
+      const e = byTask[t.task] || {};
+      return [["create", e.create_task], ["submit", e.submit_result], ["audit", e.verify_ok || e.slash], ["settle", e.settle_task]]
+        .filter(([, x]) => x && x.sig).map(([n, x]) => `<a href="${ex("tx", x.sig)}">${n}</a>`).join(" · ");
+    };
+    document.getElementById("task-table").innerHTML = `<table><thead><tr><th>Task</th><th>Condition</th><th>Miner</th>
+      <th class="num">Lift submitted</th><th class="num">Drag submitted</th><th class="num">Lift, verifier</th>
+      <th>Audit</th><th class="num">Lift, cluster</th><th>Transactions</th></tr></thead><tbody>` +
+      R.tasks.map(t => {
+        const e = byTask[t.task] || {};
+        const claimed = e.slash ? null : t;
+        const v = ver[String(t.ic)];
+        const audit = !t.audited ? `<span class="badge plain">not sampled</span>` : t.audit_ok
+          ? `<span class="badge good">✓ within tolerance</span>` : `<span class="badge bad">✗ fake, miner slashed</span>`;
+        const lift = t.audit_ok === false ? "made up" : fmt(t.CL_cluster_area, 5);
+        const drag = t.audit_ok === false ? "made up" : t.CD_cluster_area.toFixed(6);
+        return `<tr><td class="mono">${t.task}</td><td>${label(C.find(c => c.ic === t.ic) || { ic: t.ic, M: 0, AoA: 0 })}</td>
+          <td>${t.miner}</td><td class="num">${lift}</td><td class="num">${drag}</td>
+          <td class="num">${v ? fmt(v.CL * R.area_scale, 5) : "–"}</td><td>${audit}</td>
+          <td class="num">${t.ref_CL !== undefined ? fmt(t.ref_CL, 5) : "–"}</td><td>${links(t)}</td></tr>`;
+      }).join("") + `</tbody></table>`;
+    document.getElementById("miner-table").innerHTML = `<table><thead><tr><th>Miner</th><th class="num">Stake</th>
+      <th class="num">Earned</th><th class="num">Slashed</th><th>Status</th></tr></thead><tbody>` +
+      Object.entries(R.miners).map(([name, m]) => `<tr><td>${name}</td><td class="num">${m.stake}</td>
+        <td class="num">${m.earned}</td><td class="num">${m.slashed}</td><td>${m.status === "banned"
+          ? '<span class="badge bad">banned</span>' : '<span class="badge good">active</span>'}</td></tr>`).join("") +
+      `</tbody></table>`;
+  }
+})();
+</script>
+</body>
+</html>
