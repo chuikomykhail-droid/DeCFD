@@ -116,12 +116,15 @@ Laptop: Ryzen 5 6600H (6 cores / 12 threads), 16 GB RAM, WSL2 limited to 11 GB. 
 
 | Fine-grid cycles | Density residual | CL | ΔCL | CD | ΔCD, counts |
 |---|---|---|---|---|---|
-| 400 | 13.9 | 0.47346 | +0.0050 | 0.018513 | +6.6 |
-| 1,000 | 4.1 | 0.46923 | +0.0007 | 0.017935 | +0.8 |
+| 500 | 13.0 | 0.47139 | +0.0029 | 0.017951 | +1.0 |
+| 1,000 | 4.1 | 0.46923 | +0.0007 | 0.017932 | +0.8 |
 | 1,500 | 1.3 | 0.46831 | −0.0002 | 0.017914 | +0.6 |
-| 1,538 | 1.2 | 0.46848 | −0.00001 | 0.017908 | +0.5 |
+| 2,000 | 0.39 | 0.46842 | −0.0001 | 0.017842 | −0.1 |
+| **3,000 (final)** | **0.027** | **0.46850** | **+0.00001** | **0.017863** | **+0.07** |
 
-Within tolerance (CL 1e-3, CD 1 count) from about 1,000 cycles, which is about 55 minutes on this laptop. The other conditions run with a 2,000-cycle cap instead of the authors' 3,000 to save time. Any condition still moving at that point continues from ADflow's volume solution.
+The final result agrees with the cluster to 1e-5 in CL and 0.07 counts in drag. It took 2 h 47 min for 3,000 cycles, with a 5.1 GiB peak. The solution was within tolerance (CL 1e-3, CD 1 count) from about 1,000 cycles, about 55 minutes on this laptop. The cluster's ANK solver needed 1,827 steps.
+
+The other conditions run with a 2,000-cycle cap instead of the authors' 3,000 to save time. Any condition still moving at that point continues from ADflow's volume solution.
 
 ## Open questions
 
