@@ -136,11 +136,17 @@ The other conditions run with a 2,000-cycle cap instead of the authors' 3,000 to
 | 3 | 0.765 | 6.84 | 0.21247 | 0.21246 | +0.00001 | 0.011407 | 0.011429 | −0.22 | 2,000 | 1 h 57 min |
 | 4 | 0.762 | 3.05 | −0.17625 | −0.17612 | −0.00013 | 0.021463 | 0.021486 | −0.23 | 2,000 | 1 h 56 min |
 | 5 | 0.770 | 6.55 | 0.18394 | 0.18389 | +0.00005 | 0.011022 | 0.011052 | −0.30 | 2,000 | 2 h 5 min |
+| 6 | 0.771 | 3.66 | −0.12145 | −0.12140 | −0.00005 | 0.017161 | 0.017185 | −0.25 | 2,000 | 2 h 11 min |
+| 7 | 0.760 | 9.37 | 0.47341 | 0.47334 | +0.00006 | 0.018037 | 0.018062 | −0.25 | 2,000 | 2 h 7 min |
+
+**All 8 conditions match the cluster.** The largest gaps are 1.3e-4 in CL and 0.30 counts in drag, against tolerances of 1e-3 and 1 count. That includes the three conditions with negative lift, where the cluster's own CL fluctuated most.
+
+The whole shape took 17 hours on one laptop: a 15.5-minute mesh plus 16.9 hours of solver time, with a 5.9 GiB peak. `python pilot/superwing/compare.py pilot/superwing/runs/<run>` reproduces this table from the run's `result.json`.
 
 ## Open questions
 
-- Condition 0 matches with DADI. Do the low-angle conditions with negative lift (2, 4, 6) converge as well? On the cluster they had the largest CL fluctuation.
 - The reference-area offset: confirm it on a second shape, then report it to the authors.
+- 2,000 DADI cycles left drag about 0.25 counts below the cluster on most conditions; condition 0, run to 3,000, was 0.07 above. Is a residual-based stop better than a fixed cap?
 - Result size per case. Surface output is small, but the volume solution needed for restart audits is hundreds of MB.
 - Which MDO Lab image tag the authors used. We pinned one; ask the authors.
 - The tip cap geometry (1.1e-3 off) and the mesh quality gap: pyHyp version or the tip template?
