@@ -25,7 +25,7 @@ RUN source "$BASHRC_MDOLAB" \
 
 COPY vendor/ /sim/vendor/
 COPY vendor/original_tip.xyz /sim/original_tip.xyz
-COPY run_case.py /sim/run_case.py
+COPY run_case.py adflow_options.py /sim/
 
 WORKDIR /sim/cases/case
 ENTRYPOINT ["bash", "-c", "source \"$BASHRC_MDOLAB\" 2>/dev/null && exec python /sim/run_case.py \"$@\"", "run_case"]

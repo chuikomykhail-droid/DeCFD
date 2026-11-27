@@ -32,11 +32,17 @@ REYNOLDS = 20.e6            # as in single-point.py and run-adflow.py
 TEMPERATURE = 300           # K
 
 
-def mpirun(n_proc, script, cwd, log_name):
-    """Run a vendored script under MPI; stdout and stderr go to a log in `cwd`."""
-    cmd = ["mpirun", "--oversubscribe", "-np", str(n_proc), sys.executable, script]
+def mpirun(n_proc, script_args, cwd, log_name, adflow_options=None):
+    """Run a script under MPI; stdout and stderr go to a log in `cwd`.
+
+    `adflow_options` (a dict) reaches every rank as $DECFD_ADFLOW_OPTIONS, which
+    adflow_options.py merges into the options the vendored script passes to ADflow.
+    """
+    env = dict(os.environ, DECFD_ADFLOW_OPTIONS=json.dumps(adflow_options or {}))
+    cmd = ["mpirun", "--oversubscribe", "-x", "DECFD_ADFLOW_OPTIONS", "-np", str(n_proc),
+           sys.executable, *script_args]
     with open(os.path.join(cwd, log_name), "w") as log:
-        return subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT).returncode
+        return subprocess.run(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
 
 
 def memory_peak():
@@ -51,7 +57,7 @@ def memory_peak():
 def run_mesh(case, n_proc):
     shutil.copy(os.path.join(VENDOR, "gen-mesh.superwing.py"), os.path.join(case, "gen-mesh.py"))
     t0 = time.perf_counter()
-    code = mpirun(n_proc, "gen-mesh.py", case, "gen-mesh.out")
+    code = mpirun(n_proc, ["gen-mesh.py"], case, "gen-mesh.out")
     seconds = time.perf_counter() - t0
     info_path = os.path.join(case, "mesh_info.json")
     if not os.path.exists(info_path):
@@ -61,14 +67,18 @@ def run_mesh(case, n_proc):
     return {"state": "ok", "exit_code": code, "seconds": seconds, **info}
 
 
-def run_condition(case, ic, m3, aa, n_proc):
+def run_condition(case, ic, m3, aa, n_proc, adflow_options=None):
     sub = os.path.join(case, str(ic))
     os.makedirs(sub, exist_ok=True)
     with open(os.path.join(sub, "conds.json"), "w") as f:
         json.dump({"M3": m3, "AA": aa, "re": REYNOLDS, "temp": TEMPERATURE}, f)
     shutil.copy(os.path.join(VENDOR, "run-adflow.py"), os.path.join(sub, "run-adflow.py"))
+    for stale in ("output.json", "adflow.log"):   # never read a previous attempt's result
+        if os.path.exists(os.path.join(sub, stale)):
+            os.remove(os.path.join(sub, stale))
     t0 = time.perf_counter()
-    code = mpirun(n_proc, "run-adflow.py", sub, "run-adflow.out")
+    code = mpirun(n_proc, [os.path.join(HERE, "adflow_options.py"), "run-adflow.py"], sub,
+                  "run-adflow.out", adflow_options)
     seconds = time.perf_counter() - t0
     out_path = os.path.join(sub, "output.json")
     entry = {"ic": ic, "M3": m3, "AA": aa, "exit_code": code, "seconds": seconds}
@@ -89,7 +99,10 @@ def main():
     ap.add_argument("--conditions", default="all",
                     help="'all', 'none' (mesh only) or comma-separated indices, e.g. 0,3")
     ap.add_argument("--remesh", action="store_true", help="rebuild the mesh even if wing_vol.cgns exists")
+    ap.add_argument("--adflow-options", default="{}",
+                    help='JSON merged into the ADflow options, e.g. \'{"ANKSubspaceSize": 10}\'')
     args = ap.parse_args()
+    adflow_options = json.loads(args.adflow_options)
 
     case = os.path.abspath(args.case)
     with open(os.path.join(case, "input.json")) as f:
@@ -102,7 +115,13 @@ def main():
     else:
         wanted = [int(x) for x in args.conditions.split(",")]
 
-    result = {"np": args.np, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    result_path = os.path.join(case, "result.json")
+    previous = {}
+    if os.path.exists(result_path):   # a resumed run keeps earlier conditions and mesh info
+        with open(result_path) as f:
+            previous = json.load(f)
+    result = {"np": args.np, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+              "adflow_options": adflow_options}
     if args.remesh or not os.path.exists(os.path.join(case, "wing_vol.cgns")):
         result["mesh"] = run_mesh(case, args.np)
         print(f"mesh: {result['mesh']['state']} in {result['mesh']['seconds']:.0f} s", flush=True)
@@ -115,19 +134,22 @@ def main():
         with open(os.path.join(case, "input.json")) as f:
             params = json.load(f)
     else:
-        result["mesh"] = {"state": "reused"}
+        result["mesh"] = {**previous.get("mesh", {}), "reused": True}
 
-    result["conditions"] = []
+    done = {c["ic"]: c for c in previous.get("conditions", [])}
     for ic in wanted:
-        entry = run_condition(case, ic, params["M3"][ic], params["AA"][ic], args.np)
-        result["conditions"].append(entry)
+        entry = run_condition(case, ic, params["M3"][ic], params["AA"][ic], args.np, adflow_options)
+        entry.update(np=args.np, adflow_options=adflow_options, memory_peak_bytes=memory_peak())
+        done[ic] = entry
+        result["conditions"] = [done[k] for k in sorted(done)]
         cl = f"CL {entry['CL']:.5f} CD {entry['CD']:.6f}" if "CL" in entry else ""
         print(f"condition {ic}: {entry['state']} in {entry['seconds']:.0f} s {cl}", flush=True)
-        with open(os.path.join(case, "result.json"), "w") as f:   # keep partial results
+        with open(result_path, "w") as f:   # keep partial results
             json.dump({**result, "memory_peak_bytes": memory_peak()}, f, indent=1)
 
+    result["conditions"] = [done[k] for k in sorted(done)]
     result["memory_peak_bytes"] = memory_peak()
-    with open(os.path.join(case, "result.json"), "w") as f:
+    with open(result_path, "w") as f:
         json.dump(result, f, indent=1)
 
 
