@@ -9,6 +9,7 @@ Runs happen in a copy of the case under `../runs/`, which git ignores. A run wri
 
 | Case | SuperWing shape | Why |
 |---|---|---|
-| `shape0000` | 0 | First case. Its root chord was checked against the published surface (`rootadj`, see `pilot/README.md`). All 8 conditions converged on the cluster. |
+| `shape0000` | 0 | First case. `rootadj` = 0.290407 is fitted to the published surface; the `configs.dat` value is kept as `rootadj_configs` (see `pilot/README.md`). All 8 conditions converged on the cluster. |
+| `shape0001` | 1 | Second shape, to confirm the reference-area offset. `rootadj` = 0.372375 is fitted to the published surface (`configs.dat`: 0.381552). The cluster's area is 3.18% larger than the geometry's, against 3.49% for shape 0. All 8 conditions converged on the cluster. |
 
-**Data source.** These files are derived from [SuperWing](https://huggingface.co/datasets/yunplus/SuperWing) by Yang Yunjia et al. (Thuerey group, TU Munich), `configs.dat` and `running.jsonl`. They are licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), like the dataset. No values were changed; the only change is the format.
+**Data source.** These files are derived from [SuperWing](https://huggingface.co/datasets/yunplus/SuperWing) by Yang Yunjia et al. (Thuerey group, TU Munich), `configs.dat` and `running.jsonl`. They are licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), like the dataset. The values come unchanged, apart from the format, with one exception: `rootadj`, fitted to the published surface as described above.

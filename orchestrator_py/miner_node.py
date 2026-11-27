@@ -33,6 +33,7 @@ from network.solana_ledger import (CONFIG_SIZE, DEPLOYMENT, FUND_BUFFER, SolanaW
                                    load_keypair, miner_pda, task_label, task_pda)
 from network.solana_rpc import RpcClient, RpcError
 from worker_runner import APP_DIR, FROZEN, WORKER_PATH, file_hash, result_hash, run_worker
+import superwing_tasks as sw
 
 SELFTEST = os.path.join(APP_DIR, "selftest.json") if FROZEN else \
     os.path.join(os.path.dirname(DEPLOYMENT), "selftest.json")
@@ -139,9 +140,12 @@ def join(rpc, program, me, config, args):
     return account
 
 
-def compute_and_submit(rpc, program, me, config, account, addr, t, job, binary, args):
-    if job["binary_hash"] != binary:
-        return f"job pins worker {job['binary_hash'][:12]}.., mine is {binary[:12]}..: skipped"
+def compute_and_submit(rpc, program, me, config, account, addr, t, job, binary, args, sw_hash=None):
+    if sw_hash and job["binary_hash"] == sw_hash:
+        return compute_superwing(rpc, program, me, config, account, addr, t, args)
+    if binary is None or job["binary_hash"] != binary:
+        mine = binary[:12] + ".." if binary else "none"
+        return f"job pins {job['binary_hash'][:12]}.., this node runs {mine}: skipped"
     # The exact command line the client hashed: shape parameters + the job's solver settings
     task_args = [str(p) for p in t["params"]] + ["--steps", str(job["steps"]), "--avg", str(job["avg"])]
     if hashlib.sha256(" ".join(task_args).encode()).hexdigest() != t["params_hash"]:
@@ -157,7 +161,17 @@ def compute_and_submit(rpc, program, me, config, account, addr, t, job, binary, 
     h = result_hash(tid, res)
     vals = [res["fx"], res["fy"], res["cd"], res["cl"]] if res.get("status") == "ok" else None
     took = time.time() - t0
-    # The result is worth minutes of compute: keep retrying the submission through RPC hiccups
+    closed = submit(rpc, program, me, config, account, addr, t, vals, h)
+    if closed:
+        return f"computed in {took:.1f} s, but {closed}"
+    ld = res["cl"] / res["cd"] if vals and res["cd"] else 0.0
+    return f"L/D={ld:6.3f}{note}  computed in {took:.1f} s, submitted (hash {h[:10]})"
+
+
+def submit(rpc, program, me, config, account, addr, t, vals, h):
+    """Publish a result. The result is worth minutes (or hours) of compute: retry through RPC
+    hiccups. Returns None on success, or why the task no longer takes a result."""
+    tid = task_label(t["epoch"], t["index"])
     for attempt in range(6):
         try:
             send(rpc, program, "submit_result",
@@ -165,16 +179,43 @@ def compute_and_submit(rpc, program, me, config, account, addr, t, job, binary, 
                   AccountMeta(Pubkey.from_string(addr), False, True), AccountMeta(account, False, True),
                   AccountMeta(me.keypair.pubkey(), True, False)],
                  _f64s(_finite(vals, 4)) + bytes.fromhex(h), me)
-            break
+            return None
         except RpcError as e:
             if "TaskNotOpen" in str(e):
-                return f"computed in {took:.1f} s, but the task is closed (already submitted, or reassigned)"
+                return "the task is closed (already submitted, or reassigned)"
             if attempt == 5:
                 raise
             print(f"  {tid}: submit failed ({str(e)[:80]}), retrying")
             time.sleep(5 * (attempt + 1))
-    ld = res["cl"] / res["cd"] if vals and res["cd"] else 0.0
-    return f"L/D={ld:6.3f}{note}  computed in {took:.1f} s, submitted (hash {h[:10]})"
+
+
+def compute_superwing(rpc, program, me, config, account, addr, t, args):
+    """A SuperWing task: one condition of a TU Munich wing, RANS in the pilot container."""
+    shape, ic = int(t["params"][0]), int(t["params"][1])
+    input_path = sw.case_input(shape)
+    if not os.path.exists(input_path):
+        return f"SuperWing case shape{shape:04d} is not in this checkout: skipped"
+    options = sw.options_from_params(t["params"])
+    if sw.task_spec(input_path, ic, options)[1] != t["params_hash"]:
+        return f"shape{shape:04d} condition {ic}: the local case differs from the posted one: skipped"
+    tid = task_label(t["epoch"], t["index"])
+    r = random.Random(f"{tid}:{me.pubkey}")
+    t0 = time.time()
+    if args.cheat_prob and r.random() < args.cheat_prob:
+        res, note = sw.fake_result(tid, me.pubkey), " (faked)"
+    else:
+        print(f"  {tid}: shape {shape}, condition {ic} (M {t['params'][2]:.4f}, AoA {t['params'][3]:.3f}), "
+              f"{options['nCycles']} cycles on {args.np} MPI processes...")
+        res, note = sw.run_superwing(input_path, ic, options, f"{me.label}-shape{shape:04d}", args.np), ""
+    h = sw.result_hash(tid, res)
+    took = time.time() - t0
+    closed = submit(rpc, program, me, config, account, addr, t, sw.result_values(res), h)
+    if closed:
+        return f"computed in {took / 60:.1f} min, but {closed}"
+    if res.get("status") != "ok":
+        return f"failed ({res.get('code')}) after {took / 60:.1f} min; submitted the failure"
+    return (f"CL {res['CL']:.5f} CD {res['CD']:.6f}{note}  computed in {took / 60:.1f} min, "
+            f"submitted (hash {h[:10]})")
 
 
 def new_tasks(rpc, program, me, config, st):
@@ -212,6 +253,9 @@ def main():
     ap.add_argument("--cheat-prob", type=float, default=0.0, help="fake this share of results (to demo slashing)")
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between task polls")
     ap.add_argument("--skip-selftest", action="store_true")
+    ap.add_argument("--superwing", action="store_true",
+                    help="also take SuperWing tasks: RANS CFD in the pilot container (Docker; WSL on Windows)")
+    ap.add_argument("--np", type=int, default=os.cpu_count(), help="MPI processes for SuperWing tasks")
     ap.add_argument("--make-selftest", action="store_true", help="write the self-test reference and exit")
     args = ap.parse_args()
 
@@ -224,13 +268,15 @@ def main():
     rpc = RpcClient(dep["rpc"])
     program = Pubkey.from_string(dep["program_id"])
     me = SolanaWallet(load_keypair(f"node-{args.name}"), args.name)
-    binary = file_hash(WORKER_PATH)
+    binary = file_hash(WORKER_PATH) if os.path.exists(WORKER_PATH) else None
+    sw_hash = sw.pipeline_hash() if args.superwing else None
     coordinator = coordinator_key(dep)
     print(f"DeCFD miner node '{args.name}'  wallet {me.pubkey}")
-    print(f"Program {program} ({dep['cluster']}), worker {binary[:12]}..")
+    print(f"Program {program} ({dep['cluster']}), worker {binary[:12] + '..' if binary else 'none'}"
+          f"{f', SuperWing pipeline {sw_hash[:12]}..' if sw_hash else ''}")
     print(f"Balance {rpc.balance(me.pubkey) / 1e9:.4f} SOL")
 
-    if not args.skip_selftest and not run_selftest():
+    if binary and not args.skip_selftest and not run_selftest():
         sys.exit("Self-test failed: this machine computes different bits, so honest results would be slashed. "
                  "Stopping before joining a network.")
     if not args.config and not coordinator:
@@ -269,7 +315,7 @@ def main():
                 tid = task_label(t["epoch"], t["index"])
                 try:
                     print(f"  {tid}: "
-                          f"{compute_and_submit(rpc, program, me, current, account, addr, t, st['job_data'], binary, args)}")
+                          f"{compute_and_submit(rpc, program, me, current, account, addr, t, st['job_data'], binary, args, sw_hash)}")
                 except RpcError as e:
                     print(f"  {tid}: submit failed: {e}")
         except RpcError as e:

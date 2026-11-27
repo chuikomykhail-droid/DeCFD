@@ -6,6 +6,8 @@
   "min_Vol": 1.64e-15,
   "actual_ds": 1.32e-06
  },
+ "area_ref": 1.7633693114510065,
+ "area_ref_rootadj": 0.5328275736,
  "conditions": [
   {
    "ic": 0,
