@@ -231,6 +231,9 @@ def build_report(ledger, case_dir, input_path, tasks, miners, binary, audit_seed
         res, ref = t.get("res") or {}, cluster.get(t["ic"], {})
         row = {"task": t["id"], "ic": t["ic"], "miner": t["miner"]["name"], "status": ledger.task_account(t["id"])["status"],
                "audited": "audit" in t, "audit_ok": t.get("audit", {}).get("ok"), "result_hash": t["hash"]}
+        ver = t.get("audit", {}).get("verifier") or {}
+        if ver.get("status") == "ok":
+            row.update(verifier_CL=ver["CL"], verifier_CD=ver["CD"])
         if res.get("status") == "ok":
             row.update(CL=res["CL"], CD=res["CD"], n_step=res["n_step"], CL_cluster_area=res["CL"] * scale,
                        CD_cluster_area=res["CD"] * scale)

@@ -326,8 +326,7 @@ footer { margin-top: 56px; color: var(--text-2); font-size: 14px; border-top: 1p
       <th>Audit</th><th class="num">Lift, cluster</th><th>Transactions</th></tr></thead><tbody>` +
       R.tasks.map(t => {
         const e = byTask[t.task] || {};
-        const claimed = e.slash ? null : t;
-        const v = ver[String(t.ic)];
+        const v = t.verifier_CL !== undefined ? { CL: t.verifier_CL } : ver[String(t.ic)];
         const audit = !t.audited ? `<span class="badge plain">not sampled</span>` : t.audit_ok
           ? `<span class="badge good">✓ within tolerance</span>` : `<span class="badge bad">✗ fake, miner slashed</span>`;
         const lift = t.audit_ok === false ? "made up" : fmt(t.CL_cluster_area, 5);
