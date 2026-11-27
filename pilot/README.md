@@ -49,7 +49,18 @@ The published surface is stored at cell centres: its innermost station is half a
 | Root to kink, `rootadj` fitted by least squares (0.290407) | **5.4e-8: identical** |
 | Tip cap (span 3.116–3.126) | 1.1e-3 with either value; not explained yet |
 
-So `configs.dat` only approximates the root geometry the cluster used. The fitted value reproduces it exactly. The ratio of the fitted value to the sampled one is 0.545 for this shape; we found no formula for it yet. Each pilot shape therefore gets its `rootadj` fitted to the published surface (`build_case.py --rootadj`). The published geometry of any shape can be read from the dataset's `origingeom.npy` with an HTTP range request (about 0.8 MB per shape).
+So `configs.dat` only approximates the root geometry the cluster used. The fitted value reproduces it exactly. Each pilot shape therefore gets its `rootadj` fitted to the published surface:
+
+1. `fetch_surface.py` streams the published cell centres of one shape from the dataset's `data_surf.npy.zst`.
+2. `fit_rootadj.py` runs inside the image. It matches the published points to our cells and takes Newton steps on `rootadj`, re-matching every iteration.
+3. `build_case.py --rootadj` writes the case.
+
+| Shape | `rootadj` in `configs.dat` | Fitted | Sampled (`running_info`) | Fitted / sampled | Inner-wing gap after the fit |
+|---|---|---|---|---|---|
+| 0 | 0.295870 | 0.290407 | 0.532828 | 0.545 | 5.4e-8 |
+| 1 | 0.381552 | 0.372375 | 0.747330 | 0.498 | 6.9e-8 |
+
+The ratio of fitted to sampled differs between shapes, so there is no simple formula for it yet.
 
 The cap at the very tip is the one part that still differs. It is about 0.3% of the span, so its effect on the forces should be small. The comparison will show it.
 
@@ -72,6 +83,7 @@ The ratio depends on each shape's two `rootadj` values. So the published CL and 
 |---|---|
 | `superwing/vendor/` | The TU Munich scripts, byte for byte, with hashes (`NOTICE.md`) |
 | `superwing/build_case.py` | SuperWing row → `input.json` plus `reference.json` (the cluster's results) |
+| `superwing/fetch_surface.py`, `superwing/fit_rootadj.py` | The published surface of a shape; `rootadj` fitted to it |
 | `superwing/compare.py` | Our results vs. the cluster on the cluster's reference area: CL, drag in counts, steps, time, verdict |
 | `superwing/cases/` | Prepared cases (data CC BY-SA 4.0, see the README there) |
 | `../tests/test_pilot_superwing.py` | Parsing and comparison tests |
